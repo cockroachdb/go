@@ -340,6 +340,7 @@ func mProf_PostSweep() {
 func mProf_Malloc(p unsafe.Pointer, size uintptr) {
 	var stk [maxStack]uintptr
 	nstk := callers(4, stk[:])
+	bgmalloc(uintptr(p), size, stk[:nstk])
 	lock(&proflock)
 	b := stkbucket(memProfile, size, stk[:nstk], true)
 	c := mProf.cycle

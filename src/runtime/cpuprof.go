@@ -25,6 +25,10 @@ type cpuProfile struct {
 	on   bool     // profiling is on
 	log  *profBuf // profile events written here
 
+	hz    int      // active profiling hz
+	bg    bool     // background profiling is on
+	bglog *profBuf // background profiling events written here
+
 	// extra holds extra stacks accumulated in addNonGo
 	// corresponding to profiling signals arriving on
 	// non-Go-created threads. Those stacks are written
@@ -52,6 +56,10 @@ var cpuprof cpuProfile
 // the testing package's -test.cpuprofile flag instead of calling
 // SetCPUProfileRate directly.
 func SetCPUProfileRate(hz int) {
+	setCPUProfileRate(hz, &cpuprof.on, &cpuprof.log, &cpuprof.bg)
+}
+
+func setCPUProfileRate(hz int, on *bool, log **profBuf, other *bool) {
 	// Clamp hz to something reasonable.
 	if hz < 0 {
 		hz = 0
@@ -62,22 +70,35 @@ func SetCPUProfileRate(hz int) {
 
 	lock(&cpuprof.lock)
 	if hz > 0 {
-		if cpuprof.on || cpuprof.log != nil {
+		if *on || *log != nil {
 			print("runtime: cannot set cpu profile rate until previous profile has finished.\n")
 			unlock(&cpuprof.lock)
 			return
 		}
 
-		cpuprof.on = true
-		cpuprof.log = newProfBuf(1, 1<<17, 1<<14)
+		setcpuprofilerate(0) // make safe to modify *on, *log
+		if cpuprof.hz != 0 {
+			hz = cpuprof.hz
+		} else {
+			// the first successful hz will remain as long
+			// as one of the profiler is active.
+			cpuprof.hz = hz
+		}
+		*on = true
+		*log = newProfBuf(1, 1<<17, 1<<14)
 		hdr := [1]uint64{uint64(hz)}
-		cpuprof.log.write(nil, nanotime(), hdr[:], nil)
+		(*log).write(nil, nanotime(), hdr[:], nil)
 		setcpuprofilerate(int32(hz))
-	} else if cpuprof.on {
-		setcpuprofilerate(0)
-		cpuprof.on = false
+	} else if *on { // disable
+		setcpuprofilerate(0) // make safe to modify *on, *log
+		*on = false
 		cpuprof.addExtra()
-		cpuprof.log.close()
+		(*log).close()
+		if *other {
+			setcpuprofilerate(int32(cpuprof.hz))
+		} else {
+			cpuprof.hz = 0
+		}
 	}
 	unlock(&cpuprof.lock)
 }
@@ -104,6 +125,7 @@ func (p *cpuProfile) add(gp *g, stk []uintptr) {
 		// be correct. See the long comment there before
 		// changing the argument here.
 		cpuprof.log.write(&gp.labels, nanotime(), hdr[:], stk)
+		cpuprof.bglog.write(&gp.labels, nanotime(), hdr[:], stk)
 	}
 
 	atomic.Store(&prof.signalLock, 0)
@@ -149,6 +171,7 @@ func (p *cpuProfile) addExtra() {
 	hdr := [1]uint64{1}
 	for i := 0; i < p.numExtra; {
 		p.log.write(nil, 0, hdr[:], p.extra[i+1:i+int(p.extra[i])])
+		p.bglog.write(nil, 0, hdr[:], p.extra[i+1:i+int(p.extra[i])])
 		i += int(p.extra[i])
 	}
 	p.numExtra = 0
@@ -161,6 +184,7 @@ func (p *cpuProfile) addExtra() {
 			funcPC(_ExternalCode) + sys.PCQuantum,
 		}
 		p.log.write(nil, 0, hdr[:], lostStk[:])
+		p.bglog.write(nil, 0, hdr[:], lostStk[:])
 		p.lostExtra = 0
 	}
 

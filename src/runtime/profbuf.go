@@ -302,7 +302,7 @@ func (b *profBuf) canWriteTwoRecords(nstk1, nstk2 int) bool {
 // and a single tag pointer *tagPtr (or nil if tagPtr is nil).
 // No write barriers allowed because this might be called from a signal handler.
 func (b *profBuf) write(tagPtr *unsafe.Pointer, now int64, hdr []uint64, stk []uintptr) {
-	if b == nil {
+	if b == nil || atomic.Load(&b.eof) != 0 {
 		return
 	}
 	if len(hdr) > int(b.hdrsize) {
