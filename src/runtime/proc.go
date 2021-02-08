@@ -2580,6 +2580,11 @@ func execute(gp *g, inheritTime bool) {
 	if !inheritTime {
 		_g_.m.p.ptr().schedtick++
 	}
+	// BEGIN - CockroachDB tweaks
+	if gp.taskGroupCtx != nil {
+		atomic.Xadd64(&gp.taskGroupCtx.schedtick, 1)
+	}
+	// END - CockroachDB tweaks
 
 	// Check whether the profiler needs to be turned on or off.
 	hz := sched.profilehz
@@ -4142,9 +4147,11 @@ func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerp
 	if _g_.m.curg != nil {
 		newg.paniconfault = _g_.m.curg.paniconfault
 		newg.groupid = _g_.m.curg.groupid
+		newg.taskGroupCtx = _g_.m.curg.taskGroupCtx
 	} else {
 		newg.paniconfault = GetDefaultPanicOnFault()
 		newg.groupid = newg.goid
+		newg.taskGroupCtx = &defaultTaskGroupCtx
 	}
 	// END - CockroachDB tweak
 
