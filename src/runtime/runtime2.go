@@ -471,6 +471,11 @@ type g struct {
 	timer          *timer         // cached timer for time.Sleep
 	selectDone     uint32         // are we participating in a select and did someone win the race?
 
+	// BEGIN - CockroachDB tweaks
+	taskGroupId  int64 // inherited goroutine task group ID. Typically set from the task group root's own goroutine ID via SetGoroutineGroupID(GetGID()).
+	taskGroupCtx *t    // inherited task group context.
+	// END - CockroachDB tweaks
+
 	// Per-G GC state
 
 	// gcAssistBytes is this G's GC assist credit in terms of
