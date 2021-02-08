@@ -940,7 +940,7 @@ func badsignal(sig uintptr, c *sigctxt) {
 		// an M. Instead of hanging, just crash.
 		// Cannot call split-stack function as there is no G.
 		s := stringStructOf(&badginsignalMsg)
-		write(2, s.str, int32(s.len))
+		write(errfd(), s.str, int32(s.len))
 		exit(2)
 		*(*uintptr)(unsafe.Pointer(uintptr(123))) = 2
 	}

@@ -221,7 +221,7 @@ func newosproc(mp *m) {
 func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
 	stack := sysAlloc(stacksize, &memstats.stacks_sys)
 	if stack == nil {
-		write(2, unsafe.Pointer(&failallocatestack[0]), int32(len(failallocatestack)))
+		write(errfd(), unsafe.Pointer(&failallocatestack[0]), int32(len(failallocatestack)))
 		exit(1)
 	}
 	// This code "knows" it's being called once from the library
@@ -246,7 +246,7 @@ func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
 	ret := thr_new(&param, int32(unsafe.Sizeof(param)))
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 	if ret < 0 {
-		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		write(errfd(), unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
 }

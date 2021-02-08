@@ -6,9 +6,7 @@
 
 package runtime
 
-import (
-	"unsafe"
-)
+import "unsafe"
 
 const (
 	threadStackSize = 0x100000 // size of a thread stack allocated by OS
@@ -109,17 +107,17 @@ func newosproc0(stacksize uintptr, fn *funcDescriptor) {
 	)
 
 	if pthread_attr_init(&attr) != 0 {
-		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		write(errfd(), unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
 
 	if pthread_attr_setstacksize(&attr, threadStackSize) != 0 {
-		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		write(errfd(), unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
 
 	if pthread_attr_setdetachstate(&attr, _PTHREAD_CREATE_DETACHED) != 0 {
-		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		write(errfd(), unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
 
@@ -138,7 +136,7 @@ func newosproc0(stacksize uintptr, fn *funcDescriptor) {
 	}
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 	if ret != 0 {
-		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		write(errfd(), unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
 

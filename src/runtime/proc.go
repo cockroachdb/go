@@ -316,7 +316,13 @@ func goschedguarded() {
 // Reason explains why the goroutine has been parked. It is displayed in stack
 // traces and heap dumps. Reasons should be unique and descriptive. Do not
 // re-use reasons, add new ones.
-func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason waitReason, traceEv byte, traceskip int) {
+func gopark(
+	unlockf func(*g, unsafe.Pointer) bool,
+	lock unsafe.Pointer,
+	reason waitReason,
+	traceEv byte,
+	traceskip int,
+) {
 	if reason != waitReasonSleep {
 		checkTimeouts() // timeouts may expire while two goroutines keep the scheduler busy
 	}
@@ -467,7 +473,7 @@ var badmorestackg0Msg = "fatal: morestack on g0\n"
 //go:nowritebarrierrec
 func badmorestackg0() {
 	sp := stringStructOf(&badmorestackg0Msg)
-	write(2, sp.str, int32(sp.len))
+	write(errfd(), sp.str, int32(sp.len))
 }
 
 var badmorestackgsignalMsg = "fatal: morestack on gsignal\n"
@@ -476,7 +482,7 @@ var badmorestackgsignalMsg = "fatal: morestack on gsignal\n"
 //go:nowritebarrierrec
 func badmorestackgsignal() {
 	sp := stringStructOf(&badmorestackgsignalMsg)
-	write(2, sp.str, int32(sp.len))
+	write(errfd(), sp.str, int32(sp.len))
 }
 
 //go:nosplit
@@ -1832,7 +1838,7 @@ func needm() {
 		// for details.
 		//
 		// Can not throw, because scheduler is not initialized yet.
-		write(2, unsafe.Pointer(&earlycgocallback[0]), int32(len(earlycgocallback)))
+		write(errfd(), unsafe.Pointer(&earlycgocallback[0]), int32(len(earlycgocallback)))
 		exit(1)
 	}
 

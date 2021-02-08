@@ -46,7 +46,7 @@ func writeErr(b []byte) {
 	}
 
 	// Write to stderr for command-line programs.
-	write(2, unsafe.Pointer(&b[0]), int32(len(b)))
+	write(errfd(), unsafe.Pointer(&b[0]), int32(len(b)))
 
 	// Log format: "<header>\x00<message m bytes>\x00"
 	//
@@ -91,7 +91,7 @@ func initLegacy() {
 		// in case user has root on device and has run
 		//	adb shell setprop log.redirect-stdio true
 		msg := []byte("runtime: cannot open /dev/log/main\x00")
-		write(2, unsafe.Pointer(&msg[0]), int32(len(msg)))
+		write(errfd(), unsafe.Pointer(&msg[0]), int32(len(msg)))
 		exit(2)
 	}
 
@@ -114,14 +114,14 @@ func initLogd() {
 	fd := socket(_AF_UNIX, _SOCK_DGRAM|_O_CLOEXEC, 0)
 	if fd < 0 {
 		msg := []byte("runtime: cannot create a socket for logging\x00")
-		write(2, unsafe.Pointer(&msg[0]), int32(len(msg)))
+		write(errfd(), unsafe.Pointer(&msg[0]), int32(len(msg)))
 		exit(2)
 	}
 
 	errno := connect(fd, unsafe.Pointer(&logdAddr), int32(unsafe.Sizeof(logdAddr)))
 	if errno < 0 {
 		msg := []byte("runtime: cannot connect to /dev/socket/logdw\x00")
-		write(2, unsafe.Pointer(&msg[0]), int32(len(msg)))
+		write(errfd(), unsafe.Pointer(&msg[0]), int32(len(msg)))
 		// TODO(hakim): or should we just close fd and hope for better luck next time?
 		exit(2)
 	}
