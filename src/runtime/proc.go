@@ -4146,11 +4146,11 @@ func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerp
 	// BEGIN - CockroachDB tweak
 	if _g_.m.curg != nil {
 		newg.paniconfault = _g_.m.curg.paniconfault
-		newg.groupid = _g_.m.curg.groupid
+		newg.taskGroupId = _g_.m.curg.taskGroupId
 		newg.taskGroupCtx = _g_.m.curg.taskGroupCtx
 	} else {
 		newg.paniconfault = GetDefaultPanicOnFault()
-		newg.groupid = newg.goid
+		newg.taskGroupId = newg.goid
 		newg.taskGroupCtx = &defaultTaskGroupCtx
 	}
 	// END - CockroachDB tweak

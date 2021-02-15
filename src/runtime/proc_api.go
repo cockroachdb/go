@@ -91,15 +91,15 @@ func GetOSThreadID() uint64 {
 	return getg().m.procid
 }
 
-// GetGoroutineGroupID retrieves the current goroutine's task group
+// GetLogicalTaskGroupID retrieves the current goroutine's task group
 // ID. This is inherited from the goroutine's parent Top-level
 // goroutine are assigned their own ID as group ID.
-func GetGoroutineGroupID() int64 {
-	return getg().m.curg.groupid
+func GetLogicalTaskGroupID() int64 {
+	return getg().m.curg.taskGroupId
 }
 
 // SetGoroutineGroupID sets the current goroutine's task group ID.
 // This value is inherited to children goroutines.
-func SetGoroutineGroupID(groupid int64) {
-	getg().m.curg.groupid = groupid
+func SetLogicalTaskGroupID(groupid int64) {
+	getg().m.curg.taskGroupId = groupid
 }

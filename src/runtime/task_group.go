@@ -15,23 +15,23 @@ type t struct {
 // defaulTaskGroupCtx is used for top level goroutines without a task group yet.
 var defaultTaskGroupCtx t
 
-// TaskGroup represents a collection of goroutines.
-type TaskGroup *t
+// InternalTaskGroup represents a collection of goroutines.
+type InternalTaskGroup *t
 
-// SetTaskGroup creates a new task group and attaches it to the
+// SetInternalTaskGroup creates a new task group and attaches it to the
 // current goroutine. It is inherited by future children goroutines.
 // Top-level goroutines that have not been set a task group
 // share a global (default) task group.
-func SetTaskGroup() TaskGroup {
+func SetInternalTaskGroup() InternalTaskGroup {
 	// TODO: determine if we need acquirem/releasem here.
 	tg := &t{}
 	getg().m.curg.taskGroupCtx = tg
-	return TaskGroup(tg)
+	return InternalTaskGroup(tg)
 }
 
-// GetTaskGroupSchedTicks retrieves the number of scheduler ticks for
+// GetInternalTaskGroupSchedTicks retrieves the number of scheduler ticks for
 // all goroutines in the given task group.
-func GetTaskGroupSchedTicks(taskGroup TaskGroup) uint64 {
+func GetInternalTaskGroupSchedTicks(taskGroup InternalTaskGroup) uint64 {
 	tg := (*t)(taskGroup)
 	return atomic.Load64(&tg.schedtick)
 }

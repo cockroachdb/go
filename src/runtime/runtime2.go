@@ -472,7 +472,7 @@ type g struct {
 	selectDone     uint32         // are we participating in a select and did someone win the race?
 
 	// BEGIN - CockroachDB tweaks
-	groupid      int64 // inherited goroutine task group ID. Typically set from the task group root's own goroutine ID via SetGoroutineGroupID(GetGID()).
+	taskGroupId  int64 // inherited goroutine task group ID. Typically set from the task group root's own goroutine ID via SetGoroutineGroupID(GetGID()).
 	taskGroupCtx *t    // inherited task group context.
 	// END - CockroachDB tweaks
 
