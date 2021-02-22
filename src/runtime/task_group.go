@@ -6,7 +6,10 @@
 
 package runtime
 
-import "runtime/internal/atomic"
+import (
+	"runtime/internal/atomic"
+	"unsafe"
+)
 
 type t struct {
 	schedtick uint64 // incremented atomically on every scheduler call
@@ -30,16 +33,60 @@ func SetInternalTaskGroup() InternalTaskGroup {
 	return InternalTaskGroup(tg)
 }
 
-// GetInternalTaskGroupSchedTicks retrieves the number of scheduler ticks for
-// all goroutines in the given task group.
-func GetInternalTaskGroupSchedTicks(taskGroup InternalTaskGroup) uint64 {
-	tg := (*t)(taskGroup)
-	return atomic.Load64(&tg.schedtick)
+type taskGroupMetricsState struct {
+	initDone    uint32
+	metricsSema uint32
+	metrics     map[string]func(taskGroup *t, out *metricValue)
 }
 
-// GetInternalTaskGroupNanos retrieves the number of CPU nanoseconds used by
-// all goroutines in the given task group.
-func GetInternalTaskGroupNanos(taskGroup InternalTaskGroup) uint64 {
-	tg := (*t)(taskGroup)
-	return atomic.Load64(&tg.nanos)
+var taskGroupMetrics = taskGroupMetricsState{
+	initDone:    0,
+	metricsSema: 1,
+}
+
+func initTaskGroupMetrics() {
+	// The following code is morally equivalent to sync.Once.Do().
+	if atomic.Load(&taskGroupMetrics.initDone) != 0 {
+		// Fast path.
+		return
+	}
+
+	// Not initialized. Use the slow path.
+	semacquire1(&taskGroupMetrics.metricsSema, true, 0, 0)
+
+	taskGroupMetrics.metrics = map[string]func(tg *t, out *metricValue){
+		"/taskgroup/sched/ticks:ticks": func(tg *t, out *metricValue) {
+			out.kind = metricKindUint64
+			out.scalar = atomic.Load64(&tg.schedtick)
+		},
+		"/taskgroup/sched/cputime:nanoseconds": func(tg *t, out *metricValue) {
+			out.kind = metricKindUint64
+			out.scalar = atomic.Load64(&tg.nanos)
+		},
+	}
+
+	atomic.Store(&taskGroupMetrics.initDone, 1)
+	semrelease(&taskGroupMetrics.metricsSema)
+}
+
+// readTaskGroupMetrics is the implementation of runtime/metrics.ReadTaskGroup.
+//
+//go:linkname readTaskGroupMetrics runtime/metrics.runtime_readTaskGroupMetrics
+func readTaskGroupMetrics(taskGroup InternalTaskGroup, samplesp unsafe.Pointer, len int, cap int) {
+	sl := slice{samplesp, len, cap}
+	samples := *(*[]metricSample)(unsafe.Pointer(&sl))
+
+	initTaskGroupMetrics()
+
+	for i := range samples {
+		sample := &samples[i]
+		compute, ok := taskGroupMetrics.metrics[sample.name]
+		if !ok {
+			sample.value.kind = metricKindBad
+			continue
+		}
+
+		// Compute the value based on the stats we have.
+		compute((*t)(taskGroup), &sample.value)
+	}
 }
