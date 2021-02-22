@@ -474,6 +474,10 @@ type g struct {
 	// BEGIN - CockroachDB tweaks
 	taskGroupId  int64 // inherited goroutine task group ID. Typically set from the task group root's own goroutine ID via SetGoroutineGroupID(GetGID()).
 	taskGroupCtx *t    // inherited task group context.
+
+	// lastSchedTime is the nanotime of the last time a goroutine
+	// was scheduled into a P.
+	lastSchedTime int64
 	// END - CockroachDB tweaks
 
 	// Per-G GC state

@@ -10,6 +10,7 @@ import "runtime/internal/atomic"
 
 type t struct {
 	schedtick uint64 // incremented atomically on every scheduler call
+	nanos     uint64 // cumulative slices of CPU time used by the task group, in nanoseconds
 }
 
 // defaulTaskGroupCtx is used for top level goroutines without a task group yet.
@@ -34,4 +35,11 @@ func SetInternalTaskGroup() InternalTaskGroup {
 func GetInternalTaskGroupSchedTicks(taskGroup InternalTaskGroup) uint64 {
 	tg := (*t)(taskGroup)
 	return atomic.Load64(&tg.schedtick)
+}
+
+// GetInternalTaskGroupNanos retrieves the number of CPU nanoseconds used by
+// all goroutines in the given task group.
+func GetInternalTaskGroupNanos(taskGroup InternalTaskGroup) uint64 {
+	tg := (*t)(taskGroup)
+	return atomic.Load64(&tg.nanos)
 }
