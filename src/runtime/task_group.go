@@ -12,6 +12,9 @@ import (
 )
 
 type t struct {
+	// TODO(knz): explore to see if we need multiple counters side
+	// by side to avoid contention across caches (and a hot spot).
+	// (Recommended by Sumeer.)
 	schedtick uint64 // incremented atomically on every scheduler call
 	nanos     uint64 // cumulative slices of CPU time used by the task group, in nanoseconds
 }

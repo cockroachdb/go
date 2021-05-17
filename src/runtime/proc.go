@@ -2584,6 +2584,9 @@ func execute(gp *g, inheritTime bool) {
 	// Accounting for the new G, the one we're scheduling into.
 	gp.lastSchedTime = nanotime()
 	if gp.taskGroupCtx != nil {
+		// TODO(knz): explore to see if we need multiple counters side
+		// by side to avoid contention across caches (and a hot spot).
+		// (Recommended by Sumeer.)
 		atomic.Xadd64(&gp.taskGroupCtx.schedtick, 1)
 	}
 	// END - CockroachDB tweaks
@@ -3236,6 +3239,9 @@ func dropg() {
 	if _g_.m.curg != nil && _g_.m.curg.taskGroupCtx != nil {
 		endTickTime := nanotime()
 		lastTime := _g_.m.curg.lastSchedTime
+		// TODO(knz): explore to see if we need multiple counters side
+		// by side to avoid contention across caches (and a hot spot).
+		// (Recommended by Sumeer.)
 		atomic.Xadd64(&_g_.m.curg.taskGroupCtx.nanos, endTickTime-lastTime)
 	}
 	// END - CockroachDB tweaks
