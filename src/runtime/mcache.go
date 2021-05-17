@@ -230,6 +230,22 @@ func (c *mcache) allocLarge(size uintptr, needzero bool, noscan bool) *mspan {
 	atomic.Xadduintptr(&stats.largeAllocCount, 1)
 	memstats.heapStats.release()
 
+	// BEGIN - CockroachDB tweaks
+	thisG := getg()
+	if thisG.m.curg != nil {
+		thisG = thisG.m.curg
+	}
+	if thisG.taskGroupCtx != nil {
+		// TODO(knz): explore to see if we need multiple counters side
+		// by side to avoid contention across caches (and a hot spot).
+		// (Recommended by Sumeer.)
+		s.taskGroupLargeHeapUsage.set(&thisG.taskGroupCtx.bigHeapUsage)
+		atomic.Xadd64(s.taskGroupLargeHeapUsage.ptr(), int64(npages*pageSize))
+	} else {
+		s.taskGroupLargeHeapUsage = 0
+	}
+	// END - CockroachDB tweaks
+
 	// Update heap_live and revise pacing if needed.
 	atomic.Xadd64(&memstats.heap_live, int64(npages*pageSize))
 	if trace.enabled {

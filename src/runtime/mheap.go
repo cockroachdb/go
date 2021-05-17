@@ -463,6 +463,11 @@ type mspan struct {
 	limit       uintptr       // end of data in span
 	speciallock mutex         // guards specials list
 	specials    *special      // linked list of special records sorted by offset.
+
+	// BEGIN - CockroachDB tweaks
+	taskGroupLargeHeapUsage i64uintptr
+	// END - CockroachDB tweaks
+
 }
 
 func (s *mspan) base() uintptr {
@@ -1295,6 +1300,14 @@ HaveSpan:
 	}
 	memstats.heapStats.release()
 
+	// BEGIN - CockroachDB tweaks
+	// TODO(knz): The stats are being updated *after* the memory
+	// has been allocated before. This means there is a span of time
+	// where we have unaccounted memory. Perhaps better to move
+	// the accounting ahead of the actual allocation!
+	s.taskGroupLargeHeapUsage = 0
+	// END - CockroachDB tweaks
+
 	// Publish the span in various locations.
 
 	// This is safe to call without the lock held because the slots
@@ -1483,6 +1496,18 @@ func (h *mheap) freeSpanLocked(s *mspan, typ spanAllocType) {
 		atomic.Xaddint64(&stats.inWorkBufs, -int64(nbytes))
 	}
 	memstats.heapStats.release()
+
+	// BEGIN - CockroachDB tweaks
+	// TODO(knz): The call to .free() seems misplaced -
+	// the stats should be updated after the memory is effectively
+	// released.
+	// TODO(knz): explore to see if we need multiple counters side
+	// by side to avoid contention across caches (and a hot spot).
+	// (Recommended by Sumeer.)
+	if s.taskGroupLargeHeapUsage != 0 {
+		atomic.Xadd64(s.taskGroupLargeHeapUsage.ptr(), -int64(nbytes))
+	}
+	// END - CockroachDB tweaks
 
 	// Mark the space as free.
 	h.pages.free(s.base(), s.npages)
