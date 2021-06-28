@@ -301,6 +301,17 @@ func defaultContext() Context {
 	c.GOPATH = envOr("GOPATH", defaultGOPATH())
 	c.Compiler = runtime.Compiler
 
+	// BEGIN - CockroachDB tweaks
+	// Signal to the go-plus library that the extensions are available.
+	// (We may need to version this in the future if/when the set of extensions
+	// changes over time.)
+	//
+	// Note: we need to set this here (and not below) because
+	// the modload logic in cmd/go/internal/modload requires
+	// the last tag to be the current version of Go.
+	c.ReleaseTags = append(c.ReleaseTags, "goplus")
+	// END - CockroachDB tweaks
+
 	// Each major Go release in the Go 1.x series adds a new
 	// "go1.x" release tag. That is, the go1.x tag is present in
 	// all releases >= Go 1.x. Code that requires Go 1.x or later
