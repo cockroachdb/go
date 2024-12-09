@@ -111,6 +111,10 @@ It is a comma-separated list of name=val pairs setting these named variables:
 	making every garbage collection a stop-the-world event. Setting gcstoptheworld=2
 	also disables concurrent sweeping after the garbage collection finishes.
 
+	gcnoassist: setting gcnoassist=1 disables garbage collection assist, minimizing
+	garbage collection overhead for user goroutines at the expense of a higher risk
+	of out-of-memory failures with high allocation rates.
+
 	gctrace: setting gctrace=1 causes the garbage collector to emit a single line to standard
 	error at each collection, summarizing the amount of memory collected and the
 	length of the pause. The format of this line is subject to change. Included in

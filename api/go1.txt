@@ -30870,3 +30870,4 @@ pkg unicode/utf8, func RuneStart(uint8) bool
 pkg unicode/utf8, func Valid([]uint8) bool
 pkg unicode/utf8, func ValidString(string) bool
 pkg context, func PropagateCancel(Context, func()) bool
+pkg runtime, func Grunningnanos() int64

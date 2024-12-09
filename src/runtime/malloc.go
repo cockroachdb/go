@@ -1696,20 +1696,22 @@ func postMallocgcDebug(x unsafe.Pointer, elemsize uintptr, typ *_type) {
 //
 // Returns the G for which the assist credit was accounted.
 func deductAssistCredit(size uintptr) {
-	// Charge the current user G for this allocation.
-	assistG := getg()
-	if assistG.m.curg != nil {
-		assistG = assistG.m.curg
-	}
-	// Charge the allocation against the G. We'll account
-	// for internal fragmentation at the end of mallocgc.
-	assistG.gcAssistBytes -= int64(size)
+	if debug.gcnoassist == 0 {
+		// Charge the current user G for this allocation.
+		assistG := getg()
+		if assistG.m.curg != nil {
+			assistG = assistG.m.curg
+		}
+		// Charge the allocation against the G. We'll account
+		// for internal fragmentation at the end of mallocgc.
+		assistG.gcAssistBytes -= int64(size)
 
-	if assistG.gcAssistBytes < 0 {
-		// This G is in debt. Assist the GC to correct
-		// this before allocating. This must happen
-		// before disabling preemption.
-		gcAssistAlloc(assistG)
+		if assistG.gcAssistBytes < 0 {
+			// This G is in debt. Assist the GC to correct
+			// this before allocating. This must happen
+			// before disabling preemption.
+			gcAssistAlloc(assistG)
+		}
 	}
 }
 
