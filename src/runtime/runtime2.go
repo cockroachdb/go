@@ -489,6 +489,9 @@ type g struct {
 	// current in-progress goroutine profile
 	goroutineProfiled goroutineProfileStateHolder
 
+	lastsched    int64 // timestamp when the G last started running
+	runningnanos int64 // wall time spent in the running state
+
 	coroarg   *coro // argument during coroutine transfers
 	syncGroup *synctestGroup
 

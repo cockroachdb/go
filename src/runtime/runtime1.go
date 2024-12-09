@@ -316,6 +316,7 @@ var debug struct {
 	gcpacertrace             int32
 	gcshrinkstackoff         int32
 	gcstoptheworld           int32
+	gcnoassist               int32
 	gctrace                  int32
 	invalidptr               int32
 	madvdontneed             int32 // for Linux; issue 28466
@@ -376,6 +377,7 @@ var dbgvars = []*dbgVar{
 	{name: "gcpacertrace", value: &debug.gcpacertrace},
 	{name: "gcshrinkstackoff", value: &debug.gcshrinkstackoff},
 	{name: "gcstoptheworld", value: &debug.gcstoptheworld},
+	{name: "gcnoassist", value: &debug.gcnoassist},
 	{name: "gctrace", value: &debug.gctrace},
 	{name: "harddecommit", value: &debug.harddecommit},
 	{name: "inittrace", value: &debug.inittrace},
