@@ -492,7 +492,6 @@ type g struct {
 	trackingStamp int64 // timestamp of when the G last started being tracked
 	runnableTime  int64 // the amount of time spent runnable, cleared when running, only used when tracking
 	lockedm       muintptr
-	sig           uint32
 	writebuf      []byte
 	sigcode0      uintptr
 	sigcode1      uintptr
@@ -507,6 +506,9 @@ type g struct {
 	labels        unsafe.Pointer // profiler labels
 	timer         *timer         // cached timer for time.Sleep
 	selectDone    atomic.Uint32  // are we participating in a select and did someone win the race?
+	sig           uint32
+	lastsched     int64 // timestamp when the G last started running
+	runningnanos  int64 // wall time spent in the running state
 
 	coroarg *coro // argument during coroutine transfers
 
