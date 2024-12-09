@@ -1806,13 +1806,15 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 
 	if gcBlackenEnabled != 0 {
 
-		assistG := getg()
-		if assistG.m.curg != nil {
-			assistG = assistG.m.curg
-		}
-		assistG.gcAssistBytes -= int64(size)
-		if assistG.gcAssistBytes < 0 {
-			gcAssistAlloc(assistG)
+		if debug.gcnoassist == 0 {
+			assistG := getg()
+			if assistG.m.curg != nil {
+				assistG = assistG.m.curg
+			}
+			assistG.gcAssistBytes -= int64(size)
+			if assistG.gcAssistBytes < 0 {
+				gcAssistAlloc(assistG)
+			}
 		}
 	}
 
@@ -1947,13 +1949,15 @@ func mallocgcSmallScanSlowPath(size uintptr, typ *_type, needzero bool, spc span
 
 	if gcBlackenEnabled != 0 {
 
-		assistG := getg()
-		if assistG.m.curg != nil {
-			assistG = assistG.m.curg
-		}
-		assistG.gcAssistBytes -= int64(size)
-		if assistG.gcAssistBytes < 0 {
-			gcAssistAlloc(assistG)
+		if debug.gcnoassist == 0 {
+			assistG := getg()
+			if assistG.m.curg != nil {
+				assistG = assistG.m.curg
+			}
+			assistG.gcAssistBytes -= int64(size)
+			if assistG.gcAssistBytes < 0 {
+				gcAssistAlloc(assistG)
+			}
 		}
 	}
 
@@ -2124,13 +2128,15 @@ func mallocgcSmallNoScanSlowPath(size uintptr, typ *_type, needzero bool, spc sp
 
 	if gcBlackenEnabled != 0 {
 
-		assistG := getg()
-		if assistG.m.curg != nil {
-			assistG = assistG.m.curg
-		}
-		assistG.gcAssistBytes -= int64(size)
-		if assistG.gcAssistBytes < 0 {
-			gcAssistAlloc(assistG)
+		if debug.gcnoassist == 0 {
+			assistG := getg()
+			if assistG.m.curg != nil {
+				assistG = assistG.m.curg
+			}
+			assistG.gcAssistBytes -= int64(size)
+			if assistG.gcAssistBytes < 0 {
+				gcAssistAlloc(assistG)
+			}
 		}
 	}
 
