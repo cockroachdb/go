@@ -573,6 +573,8 @@ type g struct {
 
 	coroarg *coro // argument during coroutine transfers
 	bubble  *synctestBubble
+	lastsched    int64 // timestamp when the G last started running
+	runningnanos int64 // wall time spent in the running state
 
 	// xRegs stores the extended register state if this G has been
 	// asynchronously preempted.
