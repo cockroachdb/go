@@ -1237,6 +1237,11 @@ func casfrom_Gscanstatus(gp *g, oldval, newval uint32) {
 		dumpgstatus(gp)
 		throw("casfrom_Gscanstatus: gp->status is not in scan state")
 	}
+	// We're transitioning into the running state, record the timestamp for
+	// subsequent use.
+	if newval == _Grunning {
+		gp.lastsched = nanotime()
+	}
 	releaseLockRankAndM(lockRankGscan)
 }
 
@@ -1254,6 +1259,11 @@ func castogscanstatus(gp *g, oldval, newval uint32) bool {
 			r := gp.atomicstatus.CompareAndSwap(oldval, newval)
 			if r {
 				acquireLockRankAndM(lockRankGscan)
+				// We're transitioning out of running, record how long we were in the
+				// state.
+				if oldval == _Grunning {
+					gp.runningnanos += nanotime() - gp.lastsched
+				}
 			}
 			return r
 
@@ -1319,9 +1329,19 @@ func casgstatus(gp *g, oldval, newval uint32) {
 		})
 	}
 
+	now := nanotime()
+	if (oldval != _Grunning && oldval != _Gsyscall) && (newval == _Grunning || newval == _Gsyscall) {
+		// We're transitioning into the running state, record the timestamp for
+		// subsequent use.
+		gp.lastsched = now
+	}
+
 	if (oldval == _Grunning || oldval == _Gsyscall) && (newval != _Grunning && newval != _Gsyscall) {
-		// Track every gTrackingPeriod time a goroutine transitions out of _Grunning or _Gsyscall.
-		// Do not track _Grunning <-> _Gsyscall transitions, since they're two very similar states.
+		// We're transitioning out of running, record how long we were in the
+		// state.
+		gp.runningnanos += now - gp.lastsched
+
+		// Track every gTrackingPeriod time a goroutine transitions out of running.
 		if casgstatusAlwaysTrack || gp.trackingSeq%gTrackingPeriod == 0 {
 			gp.tracking = true
 		}
@@ -1341,7 +1361,6 @@ func casgstatus(gp *g, oldval, newval uint32) {
 		// We transitioned out of runnable, so measure how much
 		// time we spent in this state and add it to
 		// runnableTime.
-		now := nanotime()
 		gp.runnableTime += now - gp.trackingStamp
 		gp.trackingStamp = 0
 	case _Gwaiting:
@@ -1354,7 +1373,6 @@ func casgstatus(gp *g, oldval, newval uint32) {
 		// a more representative estimate of the absolute value.
 		// gTrackingPeriod also represents an accurate sampling period
 		// because we can only enter this state from _Grunning.
-		now := nanotime()
 		sched.totalMutexWaitTime.Add((now - gp.trackingStamp) * gTrackingPeriod)
 		gp.trackingStamp = 0
 	}
@@ -1365,12 +1383,10 @@ func casgstatus(gp *g, oldval, newval uint32) {
 			break
 		}
 		// Blocking on a lock. Write down the timestamp.
-		now := nanotime()
 		gp.trackingStamp = now
 	case _Grunnable:
 		// We just transitioned into runnable, so record what
 		// time that happened.
-		now := nanotime()
 		gp.trackingStamp = now
 	case _Grunning:
 		// We're transitioning into running, so turn off
@@ -1422,6 +1438,10 @@ func casGToPreemptScan(gp *g, old, new uint32) {
 	// ordering between the gscan and synctest locks. The bubble doesn't
 	// distinguish between _Grunning and _Gpreempted anyway, so not
 	// notifying it is fine.
+
+	// We're transitioning out of running, record how long we were in the
+	// state.
+	gp.runningnanos += nanotime() - gp.lastsched
 }
 
 // casGFromPreempted attempts to transition gp from _Gpreempted to
@@ -4244,6 +4264,14 @@ func dropg() {
 	setGNoWB(&gp.m.curg, nil)
 }
 
+// Grunningnanos returns the wall time spent by current g in the running state.
+// A goroutine may be running on an OS thread that's descheduled by the OS
+// scheduler, this time still counts towards the metric.
+func Grunningnanos() int64 {
+	gp := getg()
+	return gp.runningnanos + nanotime() - gp.lastsched
+}
+
 func parkunlock_c(gp *g, lock unsafe.Pointer) bool {
 	unlock((*mutex)(lock))
 	return true
@@ -4525,6 +4553,8 @@ func gdestroy(gp *g) {
 	gp.bubble = nil
 	gp.fipsOnlyBypass = false
 	gp.secret = 0
+	gp.lastsched = 0
+	gp.runningnanos = 0
 
 	if gcBlackenEnabled != 0 && gp.gcAssistBytes > 0 {
 		// Flush assist credit to the global pool. This gives
