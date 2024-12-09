@@ -59,6 +59,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	_ "unsafe"  // for go:linkname
 )
 
 // A Context carries a deadline, a cancellation signal, and other values across
@@ -361,6 +362,7 @@ type stopCtx struct {
 var goroutines atomic.Int32
 
 // &cancelCtxKey is the key that a cancelCtx returns itself for.
+//go:linkname cancelCtxKey
 var cancelCtxKey int
 
 // parentCancelCtx returns the underlying *cancelCtx for parent.
@@ -477,17 +479,7 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 
 	if p, ok := parentCancelCtx(parent); ok {
 		// parent is a *cancelCtx, or derives from one.
-		p.mu.Lock()
-		if p.err != nil {
-			// parent has already been canceled
-			child.cancel(false, p.err, p.cause)
-		} else {
-			if p.children == nil {
-				p.children = make(map[canceler]struct{})
-			}
-			p.children[child] = struct{}{}
-		}
-		p.mu.Unlock()
+		p.addChild(child)
 		return
 	}
 
@@ -513,6 +505,22 @@ func (c *cancelCtx) propagateCancel(parent Context, child canceler) {
 		case <-child.Done():
 		}
 	}()
+}
+
+// addChild adds child to the list of children.
+// NB: CockroachDB runtime patch.
+func (c *cancelCtx) addChild(child canceler) {
+	c.mu.Lock()
+	if c.err != nil {
+		// parent has already been canceled
+		child.cancel(false, c.err, c.cause)
+	} else {
+		if c.children == nil {
+			c.children = make(map[canceler]struct{})
+		}
+		c.children[child] = struct{}{}
+	}
+	c.mu.Unlock()
 }
 
 type stringer interface {
@@ -789,4 +797,34 @@ func value(c Context, key any) any {
 			return c.Value(key)
 		}
 	}
+}
+
+// CockroachDB runtime patch.
+// cancelerAdapter invokes f when cancel context completes.
+type cancelerAdapter struct {
+	*cancelCtx
+	f func()
+}
+
+func (c *cancelerAdapter) cancel(removeFromParent bool, err, cause error) {
+	if removeFromParent {
+		removeChild(c.cancelCtx, c)
+	}
+	c.f()
+}
+
+// PropagateCancel arranges for f to be invoked when parent is done.
+// Parent must be one of the cancelable contexts.
+// Returns true if cancellation will be propagated, false if the parent
+// is not cancelable.
+// This is similar to AfterFunc(), but does not spin up goroutine, and instead
+// invokes f on whatever goroutine completed parent context.
+func PropagateCancel(parent Context, f func()) bool {
+	p, ok := parent.Value(&cancelCtxKey).(*cancelCtx)
+	if !ok {
+		return false
+	}
+	a := cancelerAdapter{cancelCtx: p, f: f}
+	p.addChild(&a)
+	return true
 }
