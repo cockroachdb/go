@@ -30,43 +30,48 @@ func cgoCheckPtrWrite(dst *unsafe.Pointer, src unsafe.Pointer) {
 		// runtime has set itself up.
 		return
 	}
-	if !cgoIsGoPointer(src) {
-		return
+	if src != nil {
+		getg().m.p.ptr().ptrWrites++
 	}
-	if cgoIsGoPointer(unsafe.Pointer(dst)) {
-		return
-	}
+	/*
+		if !cgoIsGoPointer(src) {
+			return
+		}
+		if cgoIsGoPointer(unsafe.Pointer(dst)) {
+			return
+		}
 
-	// If we are running on the system stack then dst might be an
-	// address on the stack, which is OK.
-	gp := getg()
-	if gp == gp.m.g0 || gp == gp.m.gsignal {
-		return
-	}
+		// If we are running on the system stack then dst might be an
+		// address on the stack, which is OK.
+		gp := getg()
+		if gp == gp.m.g0 || gp == gp.m.gsignal {
+			return
+		}
 
-	// Allocating memory can write to various mfixalloc structs
-	// that look like they are non-Go memory.
-	if gp.m.mallocing != 0 {
-		return
-	}
+		// Allocating memory can write to various mfixalloc structs
+		// that look like they are non-Go memory.
+		if gp.m.mallocing != 0 {
+			return
+		}
 
-	// If the object is pinned, it's safe to store it in C memory. The GC
-	// ensures it will not be moved or freed.
-	if isPinned(src) {
-		return
-	}
+		// If the object is pinned, it's safe to store it in C memory. The GC
+		// ensures it will not be moved or freed.
+		if isPinned(src) {
+			return
+		}
 
-	// It's OK if writing to memory allocated by persistentalloc.
-	// Do this check last because it is more expensive and rarely true.
-	// If it is false the expense doesn't matter since we are crashing.
-	if inPersistentAlloc(uintptr(unsafe.Pointer(dst))) {
-		return
-	}
+		// It's OK if writing to memory allocated by persistentalloc.
+		// Do this check last because it is more expensive and rarely true.
+		// If it is false the expense doesn't matter since we are crashing.
+		if inPersistentAlloc(uintptr(unsafe.Pointer(dst))) {
+			return
+		}
 
-	systemstack(func() {
-		println("write of unpinned Go pointer", hex(uintptr(src)), "to non-Go memory", hex(uintptr(unsafe.Pointer(dst))))
-		throw(cgoWriteBarrierFail)
-	})
+		systemstack(func() {
+			println("write of unpinned Go pointer", hex(uintptr(src)), "to non-Go memory", hex(uintptr(unsafe.Pointer(dst))))
+			throw(cgoWriteBarrierFail)
+		})
+	*/
 }
 
 // cgoCheckMemmove is called when moving a block of memory.
@@ -93,13 +98,16 @@ func cgoCheckMemmove2(typ *_type, dst, src unsafe.Pointer, off, size uintptr) {
 	if !typ.Pointers() {
 		return
 	}
-	if !cgoIsGoPointer(src) {
-		return
-	}
-	if cgoIsGoPointer(dst) {
-		return
-	}
-	cgoCheckTypedBlock(typ, src, off, size)
+	countWrittenPointers(typ, 1)
+	/*
+		if !cgoIsGoPointer(src) {
+			return
+		}
+		if cgoIsGoPointer(dst) {
+			return
+		}
+		cgoCheckTypedBlock(typ, src, off, size)
+	*/
 }
 
 // cgoCheckSliceCopy is called when copying n elements of a slice.
@@ -114,17 +122,20 @@ func cgoCheckSliceCopy(typ *_type, dst, src unsafe.Pointer, n int) {
 	if !typ.Pointers() {
 		return
 	}
-	if !cgoIsGoPointer(src) {
-		return
-	}
-	if cgoIsGoPointer(dst) {
-		return
-	}
-	p := src
-	for i := 0; i < n; i++ {
-		cgoCheckTypedBlock(typ, p, 0, typ.Size_)
-		p = add(p, typ.Size_)
-	}
+	countWrittenPointers(typ, n)
+	/*
+		if !cgoIsGoPointer(src) {
+			return
+		}
+		if cgoIsGoPointer(dst) {
+			return
+		}
+		p := src
+		for i := 0; i < n; i++ {
+			cgoCheckTypedBlock(typ, p, 0, typ.Size_)
+			p = add(p, typ.Size_)
+		}
+	*/
 }
 
 // cgoCheckTypedBlock checks the block of memory at src, for up to size bytes,
@@ -188,6 +199,21 @@ func cgoCheckTypedBlock(typ *_type, src unsafe.Pointer, off, size uintptr) {
 			throw(cgoWriteBarrierFail)
 		}
 	}
+}
+
+//go:nosplit
+//go:nowritebarrier
+func countWrittenPointers(typ *_type, n int) {
+	ptrs := uint64(0)
+	for i := uintptr(0); i < typ.PtrBytes; i += goarch.PtrSize * ptrBits {
+		b := uint64(readUintptr(addb(typ.GCData, i/ptrBits)))
+		for j := range 64 {
+			if b&(uint64(1)<<j) != 0 {
+				ptrs++
+			}
+		}
+	}
+	getg().m.p.ptr().ptrWrites += ptrs * uint64(n)
 }
 
 // cgoCheckBits checks the block of memory at src, for up to size

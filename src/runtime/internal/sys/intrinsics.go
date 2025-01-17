@@ -119,6 +119,10 @@ const m1 = 0x3333333333333333 // 00110011 ...
 const m2 = 0x0f0f0f0f0f0f0f0f // 00001111 ...
 
 // OnesCount64 returns the number of one bits ("population count") in x.
+//
+// nosplit because this is used in the cgocheck2 code for memmoves.
+//
+//go:nosplit
 func OnesCount64(x uint64) int {
 	// Implementation: Parallel summing of adjacent bits.
 	// See "Hacker's Delight", Chap. 5: Counting Bits.

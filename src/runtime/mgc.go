@@ -130,6 +130,7 @@ package runtime
 
 import (
 	"internal/cpu"
+	"internal/goexperiment"
 	"internal/runtime/atomic"
 	"unsafe"
 )
@@ -1162,6 +1163,14 @@ func gcMarkTermination(stw worldStop) {
 		throw("non-concurrent sweep failed to drain all sweep queues")
 	}
 
+	// Accumulate pointer writes before restarting the world.
+	ptrWrites := uint64(0)
+	if goexperiment.CgoCheck2 {
+		for _, pp := range allp {
+			ptrWrites += pp.ptrWrites
+		}
+	}
+
 	systemstack(func() {
 		// The memstats updated above must be updated with the world
 		// stopped to ensure consistency of some values, such as
@@ -1263,6 +1272,19 @@ func gcMarkTermination(stw worldStop) {
 			work.maxprocs, " P")
 		if work.userForced {
 			print(" (forced)")
+		}
+		if goexperiment.CgoCheck2 {
+			var stats heapStatsDelta
+			memstats.heapStats.read(&stats)
+			allocs := stats.tinyAllocCount + stats.largeAllocCount
+			allocBytes := stats.largeAlloc
+			for i, c := range stats.smallAllocCount {
+				allocs += c
+				allocBytes += c * uint64(class_to_size[i])
+			}
+			print(" ", ptrWrites, "w")
+			print(" ", allocs, "o")
+			print(" ", allocBytes, "b")
 		}
 		print("\n")
 		printunlock()
