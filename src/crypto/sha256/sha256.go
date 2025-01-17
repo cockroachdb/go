@@ -28,6 +28,10 @@ const Size224 = 28
 // The blocksize of SHA256 and SHA224 in bytes.
 const BlockSize = 64
 
+// The maximum number of bytes that can be passed to block.
+const maxAsmIters = 1024
+const maxAsmSize = BlockSize * maxAsmIters // 64KiB
+
 const (
 	chunk     = 64
 	init0     = 0x6A09E667
@@ -186,6 +190,11 @@ func (d *digest) Write(p []byte) (nn int, err error) {
 	}
 	if len(p) >= chunk {
 		n := len(p) &^ (chunk - 1)
+		for n > maxAsmSize {
+			block(d, p[:maxAsmSize])
+			p = p[maxAsmSize:]
+			n -= maxAsmSize
+		}
 		block(d, p[:n])
 		p = p[n:]
 	}
