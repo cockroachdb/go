@@ -148,6 +148,7 @@ func mutexContended(l *mutex) bool {
 	return atomic.Loaduintptr(&l.key)&^mutexMMask != 0
 }
 
+//go:linkname lock
 func lock(l *mutex) {
 	lockWithRank(l, getLockRank(l))
 }
@@ -257,6 +258,7 @@ tryAcquire:
 	}
 }
 
+//go:linkname unlock
 func unlock(l *mutex) {
 	unlockWithRank(l)
 }

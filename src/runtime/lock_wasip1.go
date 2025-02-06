@@ -27,6 +27,7 @@ func mutexContended(l *mutex) bool {
 	return false
 }
 
+//go:linkname lock
 func lock(l *mutex) {
 	lockWithRank(l, getLockRank(l))
 }
@@ -45,6 +46,7 @@ func lock2(l *mutex) {
 	l.key = mutex_locked
 }
 
+//go:linkname unlock
 func unlock(l *mutex) {
 	unlockWithRank(l)
 }
