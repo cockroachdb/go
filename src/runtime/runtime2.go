@@ -1194,6 +1194,7 @@ var (
 
 	// len(allp) == gomaxprocs; may change at safe points, otherwise
 	// immutable.
+	//go:linkname allp
 	allp []*p
 
 	// Bitmask of Ps in _Pidle list, one bit per P. Reads and writes must
