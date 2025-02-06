@@ -48,6 +48,7 @@ func mutexContended(l *mutex) bool {
 	return atomic.Load(key32(&l.key)) > mutex_locked
 }
 
+//go:linkname lock
 func lock(l *mutex) {
 	lockWithRank(l, getLockRank(l))
 }
@@ -117,6 +118,7 @@ func lock2(l *mutex) {
 	}
 }
 
+//go:linkname unlock
 func unlock(l *mutex) {
 	unlockWithRank(l)
 }
