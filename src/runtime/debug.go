@@ -220,3 +220,39 @@ func debugPinnerV1() *Pinner {
 	}
 	return p
 }
+
+// NumRunnableGoroutines returns the number of goroutines that are in a runnable
+// state (i.e. waiting for a chance to run) and the current value of GOMAXPROCS.
+//
+// The ratio between the two can be used as a rough measure of CPU overload (if
+// sampled with enough frequency).
+func NumRunnableGoroutines() (numRunnable int, numProcs int) {
+	mp := acquirem()
+	lock(&sched.lock)
+	numRunnable = int(sched.runq.size)
+	numProcs = len(allp)
+
+	// Note that holding sched.lock prevents the number of Ps from changing, so
+	// it's safe to loop over allp.
+	for _, p := range allp {
+		// Retry loop for concurrent updates.
+		for {
+			h := atomic.Load(&p.runqhead)
+			t := atomic.Load(&p.runqtail)
+			next := atomic.Loaduintptr((*uintptr)(unsafe.Pointer(&p.runnext)))
+			runnable := int32(t - h)
+			if atomic.Load(&p.runqhead) != h || runnable < 0 {
+				// A concurrent update messed with us; try again.
+				continue
+			}
+			if next != 0 {
+				runnable++
+			}
+			numRunnable += int(runnable)
+			break
+		}
+	}
+	unlock(&sched.lock)
+	releasem(mp)
+	return numRunnable, numProcs
+}
