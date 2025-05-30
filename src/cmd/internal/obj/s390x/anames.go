@@ -180,6 +180,7 @@ var Anames = []string{
 	"CMPUBNE",
 	"MVC",
 	"MVCIN",
+	"MVCLE",
 	"CLC",
 	"XC",
 	"OC",
