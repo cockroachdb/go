@@ -15,6 +15,7 @@ TEXT runtime·memmove(SB),NOSPLIT|NOFRAME,$0-24
 	CMPBEQ	R6, R4, done
 
 start:
+moveLE16:
 	CMPBLE	R5, $3, move0to3
 	CMPBLE	R5, $7, move4to7
 	CMPBLE	R5, $11, move8to11
@@ -27,48 +28,82 @@ start:
 	RET
 
 movemt16:
-	CMPBGT	R4, R6, forwards
+	CMPBGT	R4, R6, forwards_copy
 	ADD	R5, R4, R7
-	CMPBLE	R7, R6, forwards
+	CMPBLE	R7, R6, forwards_copy
 	ADD	R5, R6, R8
-backwards:
-	MOVD	-8(R7), R3
-	MOVD	R3, -8(R8)
-	MOVD	-16(R7), R3
-	MOVD	R3, -16(R8)
-	ADD	$-16, R5
-	ADD	$-16, R7
-	ADD	$-16, R8
-	CMP	R5, $16
-	BGE	backwards
-	BR	start
 
-forwards:
-	CMPBGT	R5, $64, forwards_fast
-	MOVD	0(R4), R3
-	MOVD	R3, 0(R6)
-	MOVD	8(R4), R3
-	MOVD	R3, 8(R6)
-	ADD	$16, R4
-	ADD	$16, R6
+// backwards_copy is used in below scenario:
+// 1. When src and dst are overlapping, and the dst is at higher address than src.
+backwards_copy:
+	MOVD	R5, R8
+	SRD	$4, R8
 	ADD	$-16, R5
-	CMP	R5, $16
-	BGE	forwards
-	BR	start
+	CMPBGE	R8, $8, moveGE128
 
-forwards_fast:
-	CMP	R5, $256
-	BLE	forwards_small
+moveLT128:
+	MOVD	8(R4)(R5), R3
+	MOVD	R3, 8(R6)(R5)
+	MOVD	0(R4)(R5), R3
+	MOVD	R3, 0(R6)(R5)
+	ADD	$-16, R5
+	BRCTG	R8, moveLT128
+	ADD	$16, R5
+	BR	moveLE16
+
+moveGE128:
+	ADD	$-48, R5
+	SRD	$2, R8, R0
+
+move_large_64_loop:
+	VL	0(R4)(R5), V1
+	VL	16(R4)(R5), V2
+	VL	32(R4)(R5), V3
+	VL	48(R4)(R5), V4
+	VST	V1, 0(R6)(R5)
+	VST	V2, 16(R6)(R5)
+	VST	V3, 32(R6)(R5)
+	VST	V4, 48(R6)(R5)
+	ADD	$-64, R5
+	BRCTG	R0, move_large_64_loop
+	ADD	$48, R5
+	AND	$3, R8
+	BNE	moveLT128
+	ADD	$16, R5
+	BR	moveLE16
+
+// forwards_copy is used in below scenarios:
+// 1. When src and dst are non-overlapping.
+// 2. When src and dst are overlapping, but src is at higher address than dst.
+forwards_copy:
+	MOVD	R5, R8
+	SRD	$8, R8
+	CMPBNE	R8, $0, moveGE256
+
+use_exrl:
+	CMPBEQ	R5, $0, done
+	ADD	$-1, R5
+	EXRL	$memmove_exrl_mvc<>(SB), R5
+	RET
+
+moveGE256:
+	CMP	R8, $4096
+	BGT	moveGT1MB
+
+mvc_loop:
 	MVC	$256, 0(R4), 0(R6)
 	ADD	$256, R4
 	ADD	$256, R6
 	ADD	$-256, R5
-	BR	forwards_fast
+	BRCTG	R8, mvc_loop
+	BR	use_exrl
 
-forwards_small:
-	CMPBEQ	R5, $0, done
-	ADD	$-1, R5
-	EXRL	$memmove_exrl_mvc<>(SB), R5
+moveGT1MB:
+	MOVD	R5, R7
+
+mvcle_loop:
+	MVCLE	0, R4, R6
+	BVS	mvcle_loop
 	RET
 
 move0to3:
