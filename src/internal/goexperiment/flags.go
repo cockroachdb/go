@@ -129,4 +129,6 @@ type Flags struct {
 
 	// GreenTeaGC enables the Green Tea GC implementation.
 	GreenTeaGC bool
+
+	CoverageReDesign bool
 }
