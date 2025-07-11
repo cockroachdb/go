@@ -1525,7 +1525,7 @@ func cmdbootstrap() {
 	}
 
 	// To recap, so far we have built the new toolchain
-	// (cmd/asm, cmd/cgo, cmd/compile, cmd/link, cmd/preprofile)
+	// (cmd/asm, cmd/cgo, cmd/compile, cmd/link)
 	// using the Go bootstrap toolchain and go command.
 	// Then we built the new go command (as go_bootstrap)
 	// using the new toolchain and our own build logic (above).
@@ -1614,9 +1614,9 @@ func cmdbootstrap() {
 			xprintf("\n")
 		}
 		xprintf("Building commands for host, %s/%s.\n", goos, goarch)
-		goInstall(toolenv(), goBootstrap, toolsToInstall...)
-		checkNotStale(toolenv(), goBootstrap, toolsToInstall...)
-		checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
+		goInstall(toolenv(), goBootstrap, "cmd")
+		checkNotStale(toolenv(), goBootstrap, "cmd")
+		checkNotStale(toolenv(), gorootBinGo, "cmd")
 
 		timelog("build", "target toolchain")
 		if vflag > 0 {
@@ -1630,12 +1630,12 @@ func cmdbootstrap() {
 		xprintf("Building packages and commands for target, %s/%s.\n", goos, goarch)
 	}
 	goInstall(nil, goBootstrap, "std")
-	goInstall(toolenv(), goBootstrap, toolsToInstall...)
+	goInstall(toolenv(), goBootstrap, "cmd")
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
-	checkNotStale(toolenv(), goBootstrap, toolsToInstall...)
+	checkNotStale(toolenv(), goBootstrap, "cmd")
 	checkNotStale(nil, gorootBinGo, "std")
-	checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
+	checkNotStale(toolenv(), gorootBinGo, "cmd")
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
 		checkNotStale(toolenv(), goBootstrap, toolchain...)
@@ -1686,7 +1686,7 @@ func cmdbootstrap() {
 
 	if distpack {
 		xprintf("Packaging archives for %s/%s.\n", goos, goarch)
-		run("", ShowOutput|CheckExit, gorootBinGo, "tool", "distpack")
+		run("", ShowOutput|CheckExit, pathf("%s/distpack", tooldir))
 	}
 
 	// Print trailing banner unless instructed otherwise.
