@@ -749,6 +749,9 @@ func countGoroutine() int {
 
 // writeGoroutine writes the current runtime GoroutineProfile to w.
 func writeGoroutine(w io.Writer, debug int) error {
+	if debug == 26257 {
+		return writeGoroutineStacksWithLabels(w)
+	}
 	if debug >= 2 {
 		return writeGoroutineStacks(w)
 	}
@@ -774,6 +777,107 @@ func writeGoroutineStacks(w io.Writer) error {
 	}
 	_, err := w.Write(buf)
 	return err
+}
+
+// writeGoroutineStacksWithLabels writes individual goroutine stack traces like
+// writeGoroutineStacks, but uses the concurrent, reduced-stop time approach of
+// goroutineProfileWithLabelsConcurrent. It includes the ID, state, and labels
+// for each goroutine, although as these are captured after the world is resumed
+// they are not guaranteed to be entirely consistent as of a single point in
+// time.
+func writeGoroutineStacksWithLabels(w io.Writer) error {
+	n, ok := pprof_goroutineStacksWithLabels(nil, nil, nil)
+
+	for {
+		// Allocate slices for individual goroutine data
+		stacks := make([]profilerecord.StackRecord, n+10)
+		labels := make([]unsafe.Pointer, n+10)
+		infos := make([]profilerecord.GoroutineInfo, n+10)
+
+		n, ok = pprof_goroutineStacksWithLabels(stacks, labels, infos)
+		if ok {
+			return printGoroutineStacksWithLabels(w, stacks[:n], labels[:n], infos[:n])
+		}
+		// Profile grew; try again with larger slices
+	}
+}
+
+// printGoroutineStacksWithLabels formats goroutine records in a format similar
+// to runtime.Stack, but also includes labels as well.
+func printGoroutineStacksWithLabels(
+	w io.Writer, records []profilerecord.StackRecord, labels []unsafe.Pointer, infos []profilerecord.GoroutineInfo,
+) error {
+	for i, r := range records {
+		goroutineID := infos[i].ID
+		state := "unknown"
+		if i < len(infos) && infos[i].State != "" {
+			state = infos[i].State
+		}
+
+		// Calculate blocked time (same logic as goroutineheader in traceback.go)
+		blockedStr := ""
+		if i < len(infos) && infos[i].WaitSince != 0 {
+			// Check if this is a waiting or syscall state where blocked time applies.
+			if strings.Contains(state, "waiting") || strings.Contains(state, "syscall") {
+				waitfor := (runtime_nanotime() - infos[i].WaitSince) / 60e9 // convert to minutes
+				if waitfor >= 1 {
+					blockedStr = fmt.Sprintf(", %d minutes", waitfor)
+				}
+			}
+		}
+
+		// Get label information using the same format as debug=1.
+		var labelStr string
+		if i < len(labels) && labels[i] != nil {
+			labelMap := (*labelMap)(labels[i])
+			if labelMap != nil && len(labelMap.list) > 0 {
+				labelStr = labelMap.String()
+			}
+		}
+
+		fmt.Fprintf(w, "goroutine %d [%s%s]%s:\n", goroutineID, state, blockedStr, labelStr)
+
+		// Print stack trace with runtime filtering (same logic as debug=2).
+		show := false
+		frames := runtime.CallersFrames(r.Stack)
+		for {
+			frame, more := frames.Next()
+			name := frame.Function
+			// Hide runtime.goexit, runtime.main as well as any runtime prior to the
+			// first non-runtime function.
+			if name != "runtime.goexit" && name != "runtime.main" && (show || !(strings.HasPrefix(name, "runtime.") || strings.HasPrefix(name, "internal/runtime/"))) {
+				show = true
+				if name == "" {
+					name = "unknown"
+				}
+				fmt.Fprintf(w, "%s(...)\n", name)
+				fmt.Fprintf(w, "\t%s:%d +0x%x\n", frame.File, frame.Line, frame.PC-frame.Entry)
+			}
+			if !more {
+				break
+			}
+		}
+
+		// Print "created by" information if available (skip main goroutine)
+		if i < len(infos) && goroutineID != 1 && infos[i].CreationPC != 0 {
+			if f := runtime.FuncForPC(infos[i].CreationPC - 1); f != nil {
+				name := f.Name()
+				file, line := f.FileLine(infos[i].CreationPC - 1)
+				if infos[i].CreatorID != 0 {
+					fmt.Fprintf(w, "created by %s in goroutine %d\n", name, infos[i].CreatorID)
+				} else {
+					fmt.Fprintf(w, "created by %s\n", name)
+				}
+				fmt.Fprintf(w, "\t%s:%d +0x%x\n", file, line, infos[i].CreationPC)
+			}
+		}
+
+		if i < len(records)-1 {
+			fmt.Fprintln(w)
+		}
+	}
+
+	return nil
 }
 
 func writeRuntimeProfile(w io.Writer, debug int, name string, fetch func([]profilerecord.StackRecord, []unsafe.Pointer) (int, bool)) error {
@@ -977,8 +1081,14 @@ func writeProfileInternal(w io.Writer, debug int, name string, runtimeProfile fu
 //go:linkname pprof_goroutineProfileWithLabels runtime.pprof_goroutineProfileWithLabels
 func pprof_goroutineProfileWithLabels(p []profilerecord.StackRecord, labels []unsafe.Pointer) (n int, ok bool)
 
+//go:linkname pprof_goroutineStacksWithLabels runtime.pprof_goroutineStacksWithLabels
+func pprof_goroutineStacksWithLabels(stacks []profilerecord.StackRecord, labels []unsafe.Pointer, infos []profilerecord.GoroutineInfo) (n int, ok bool)
+
 //go:linkname pprof_cyclesPerSecond runtime/pprof.runtime_cyclesPerSecond
 func pprof_cyclesPerSecond() int64
+
+//go:linkname runtime_nanotime runtime.nanotime
+func runtime_nanotime() int64
 
 //go:linkname pprof_memProfileInternal runtime.pprof_memProfileInternal
 func pprof_memProfileInternal(p []profilerecord.MemProfileRecord, inuseZero bool) (n int, ok bool)

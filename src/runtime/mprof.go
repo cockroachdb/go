@@ -1320,7 +1320,7 @@ func goroutineProfileWithLabels(p []profilerecord.StackRecord, labels []unsafe.P
 		labels = nil
 	}
 
-	return goroutineProfileWithLabelsConcurrent(p, labels)
+	return goroutineProfileWithLabelsConcurrent(p, labels, nil)
 }
 
 var goroutineProfile = struct {
@@ -1328,9 +1328,49 @@ var goroutineProfile = struct {
 	active  bool
 	offset  atomic.Int64
 	records []profilerecord.StackRecord
-	labels  []unsafe.Pointer
+	// labels, if non-nil, should have the same length as records.
+	labels []unsafe.Pointer
+	// infos, if non-nil, should have the same length as records.
+	infos []profilerecord.GoroutineInfo
 }{
 	sema: 1,
+}
+
+// goroutineStatusString converts goroutine status to human-readable string
+// Uses the same logic as goroutineheader() in traceback.go
+func goroutineStatusString(gp1 *g) string {
+	gpstatus := readgstatus(gp1)
+	gpstatus &^= _Gscan // drop the scan bit
+
+	// Basic string status
+	var status string
+	switch gpstatus {
+	case _Gidle:
+		status = "idle"
+	case _Grunnable:
+		status = "runnable"
+	case _Grunning:
+		status = "running"
+	case _Gsyscall:
+		status = "syscall"
+	case _Gwaiting:
+		status = "waiting"
+	case _Gdead:
+		status = "dead"
+	case _Gcopystack:
+		status = "copystack"
+	case _Gpreempted:
+		status = "preempted"
+	default:
+		status = "unknown"
+	}
+
+	// Override with wait reason if available (same logic as goroutineheader)
+	if gpstatus == _Gwaiting && gp1.waitreason != waitReasonZero {
+		status = gp1.waitreason.String()
+	}
+
+	return status
 }
 
 // goroutineProfileState indicates the status of a goroutine's stack for the
@@ -1366,7 +1406,18 @@ func (p *goroutineProfileStateHolder) CompareAndSwap(old, new goroutineProfileSt
 	return (*atomic.Uint32)(p).CompareAndSwap(uint32(old), uint32(new))
 }
 
-func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels []unsafe.Pointer) (n int, ok bool) {
+// goroutineProfileWithLabelsConcurrent collects the stacks of all user
+// goroutines into the passed slice, provided it has sufficeient length to do
+// so, returning the number collected and ok=true. If the passed slice does
+// not have sufficient length, it returns the required length and ok=false
+// instead.
+//
+// Additional information about each goroutine can optionally be collected into
+// the labels and/or infos slices if they are non-nil. Their length must match
+// len(p) if non-nil.
+func goroutineProfileWithLabelsConcurrent(
+	p []profilerecord.StackRecord, labels []unsafe.Pointer, infos []profilerecord.GoroutineInfo,
+) (n int, ok bool) {
 	if len(p) == 0 {
 		// An empty slice is obviously too small. Return a rough
 		// allocation estimate without bothering to STW. As long as
@@ -1411,6 +1462,17 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	if labels != nil {
 		labels[0] = ourg.labels
 	}
+
+	// If extended goroutine info collection is enabled, gather the additional
+	// fields as well.
+	if len(infos) > 0 {
+		infos[0].ID = ourg.goid
+		infos[0].CreatorID = ourg.parentGoid
+		infos[0].CreationPC = ourg.gopc
+		infos[0].State = goroutineStatusString(ourg)
+		infos[0].WaitSince = ourg.waitsince
+	}
+
 	ourg.goroutineProfiled.Store(goroutineProfileSatisfied)
 	goroutineProfile.offset.Store(1)
 
@@ -1422,6 +1484,8 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	goroutineProfile.active = true
 	goroutineProfile.records = p
 	goroutineProfile.labels = labels
+	goroutineProfile.infos = infos
+
 	// The finalizer goroutine needs special handling because it can vary over
 	// time between being a user goroutine (eligible for this profile) and a
 	// system goroutine (to be excluded). Pick one before restarting the world.
@@ -1453,6 +1517,7 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	goroutineProfile.active = false
 	goroutineProfile.records = nil
 	goroutineProfile.labels = nil
+	goroutineProfile.infos = nil
 	startTheWorld(stw)
 
 	// Restore the invariant that every goroutine struct in allgs has its
@@ -1575,8 +1640,19 @@ func doRecordGoroutineProfile(gp1 *g, pcbuf []uintptr) {
 	// to avoid schedule delays.
 	systemstack(func() { saveg(^uintptr(0), ^uintptr(0), gp1, &goroutineProfile.records[offset], pcbuf) })
 
+	// If label collection is enabled, collect the labels.
 	if goroutineProfile.labels != nil {
 		goroutineProfile.labels[offset] = gp1.labels
+	}
+
+	// If extended goroutine info collection is enabled and there is sufficient
+	// capacity to do so, gather the additional goroutine fields as well.
+	if goroutineProfile.infos != nil && offset < len(goroutineProfile.infos) {
+		goroutineProfile.infos[offset].ID = gp1.goid
+		goroutineProfile.infos[offset].CreatorID = gp1.parentGoid
+		goroutineProfile.infos[offset].CreationPC = gp1.gopc
+		goroutineProfile.infos[offset].State = goroutineStatusString(gp1)
+		goroutineProfile.infos[offset].WaitSince = gp1.waitsince
 	}
 }
 
@@ -1732,4 +1808,9 @@ func Stack(buf []byte, all bool) int {
 		startTheWorld(stw)
 	}
 	return n
+}
+
+//go:linkname pprof_goroutineStacksWithLabels
+func pprof_goroutineStacksWithLabels(stacks []profilerecord.StackRecord, labels []unsafe.Pointer, infos []profilerecord.GoroutineInfo) (n int, ok bool) {
+	return goroutineProfileWithLabelsConcurrent(stacks, labels, infos)
 }

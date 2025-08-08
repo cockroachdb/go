@@ -1934,6 +1934,342 @@ func BenchmarkGoroutine(b *testing.B) {
 	}
 }
 
+func TestGoroutineProfileDebug25257MatchesDebug2(t *testing.T) {
+	// Create synthetic goroutines using the helper
+	cleanup := createSyntheticGoroutines(35, 10, 4)
+	defer cleanup()
+
+	// Get reference output.
+	profile := Lookup("goroutine")
+	var buf bytes.Buffer
+	err := profile.WriteTo(&buf, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := parseGoroutines(t, buf.String(), true)
+
+	// Get fast output.
+	buf.Reset()
+	err = profile.WriteTo(&buf, 26257)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseGoroutines(t, buf.String(), true)
+
+	if len(got) != len(expected) {
+		t.Errorf("Expected %d goroutines, got %d", len(expected), len(got))
+	}
+
+	for id, info := range expected {
+		found, ok := got[id]
+		if !ok {
+			t.Log(info.raw)
+			t.Fatalf("goroutine %s not found in actual output", id)
+			continue
+		}
+		if info.state != found.state {
+			t.Log(info.raw)
+			t.Log(found.raw)
+			t.Fatalf("goroutine %s state mismatch: expected %q, got %q", id, info.state, found.state)
+		}
+
+		for line := 0; line < min(len(info.stack), len(found.stack)); line++ {
+			if info.stack[line] != found.stack[line] {
+				t.Log(info.raw)
+				t.Log(found.raw)
+				t.Fatalf("goroutine %s stack line %d does not match: expected %q, got %q", id, line, found.stack[line], info.stack[line])
+			}
+		}
+		if len(info.stack) != len(found.stack) {
+			t.Log(info.raw)
+			t.Log(found.raw)
+			if len(info.stack) < len(found.stack) {
+				for line := len(info.stack); line < len(found.stack); line++ {
+					t.Logf("Goroutine %s missing stack line %d: %q", id, line, found.stack[line])
+				}
+				t.Fatalf("Goroutine %s stack too short: expected %d lines, got %d lines", id, len(info.stack), len(found.stack))
+			} else {
+				for line := len(found.stack); line < len(info.stack); line++ {
+					t.Logf("Goroutine %s extra stack line %d: %q", id, line, info.stack[line])
+				}
+				t.Fatalf("Goroutine %s stack too long: expected %d lines, got %d lines", id, len(info.stack), len(found.stack))
+			}
+		}
+	}
+}
+
+// BenchmarkGoroutineProfileLatencyImpact measures the latency impact on *other*
+// running goroutines during goroutine profile collection, when variable numbers
+// of other goroutines are profiled. This focus on the observed latency of in
+// other goroutines is what differentiates this benchmark from other benchmarks
+// of goroutine profiling, such as BenchmarkGoroutine, that measure the
+// the performance of profiling itself rather than its impact on the performance
+// of concurrently executing goroutines.
+func BenchmarkGoroutineProfileLatencyImpact(b *testing.B) {
+	for _, numGoroutines := range []int{100, 1000, 10000, 25000} {
+		for _, withDepth := range []int{3, 10, 50} {
+			b.Run(fmt.Sprintf("goroutines=%dx%d", numGoroutines, withDepth), func(b *testing.B) {
+				// Setup synthetic blocked goroutines using helper
+				cleanup := createSyntheticGoroutines(numGoroutines, withDepth, 24)
+				defer cleanup()
+				for _, debug := range []int{1, 2, 26257, -1} {
+					name := fmt.Sprintf("debug=%d", debug)
+					if debug < 0 {
+						name = "debug=none"
+					}
+					b.Run(name, func(b *testing.B) {
+						// Launch latency probe goroutines.
+						const numProbes = 3
+						probeStop := make(chan struct{})
+						var probeWg, probesReady sync.WaitGroup
+						probes := make([]time.Duration, numProbes)
+						for prober := 0; prober < numProbes; prober++ {
+							probeWg.Add(1)
+							probesReady.Add(1)
+							go func(idx int) {
+								defer probeWg.Done()
+								probesReady.Done()
+								for {
+									select {
+									case <-probeStop:
+										return
+									default:
+										last := time.Now()
+										for i := 0; i < 20; i++ {
+											latency := time.Since(last)
+											last = time.Now()
+											if probes[idx] < latency {
+												probes[idx] = latency
+											}
+										}
+									}
+								}
+							}(prober)
+						}
+						probesReady.Wait()
+
+						for i := 0; i < b.N; i++ {
+							if debug >= 0 {
+								var buf bytes.Buffer
+								err := Lookup("goroutine").WriteTo(&buf, debug)
+								if err != nil {
+									b.Fatalf("Profile failed: %v", err)
+								}
+								b.SetBytes(int64(buf.Len()))
+
+							} else {
+								// Just observe the probes without a profile interrupting them.
+								time.Sleep(15 * time.Millisecond)
+							}
+						}
+						close(probeStop)
+						probeWg.Wait()
+
+						var probeMax time.Duration
+						for _, probe := range probes {
+							if probe > probeMax {
+								probeMax = probe
+							}
+						}
+						b.ReportMetric(float64(probeMax), "max_latency_ns")
+					})
+				}
+			})
+		}
+	}
+}
+
+// createSyntheticGoroutines creates a requested number of goroutines to provide
+// testdata against which various stack dummping facilities such as
+// runtime.Stack(all=true) or pprof.Lookup("goroutine").WriteTo(debug=1/2) can
+// be tested or benchmarked. It returns once the requested goroutines have been
+// started, after which they block on a ch until the returned cleanup func is
+// called to stop them and wait for them to exit. The stacks of the goroutines
+// will vary with up to 9 different sequences of calls and some variation in the
+// exact depth depending on the sequence. If labels > 0, some (but not all)
+// launched goroutines will have a pprof label applied, which is intentionally
+// set differently from the call sequence choice so the same stack may appear
+// with different labels in different goroutines.
+func createSyntheticGoroutines(numGoroutines, minDepth, labels int) func() {
+	var syntheticStackFn0, syntheticStackFn1, syntheticStackFn2 func(<-chan struct{}, int)
+	var syntheticStackFn3, syntheticStackFn4, syntheticStackFn5 func(<-chan struct{}, int)
+	var syntheticStackFn6, syntheticStackFn7, syntheticStackFn8 func(<-chan struct{}, int)
+
+	syntheticStackFn0 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn1(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn1 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn2(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn2 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn3(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn3 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn4(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn4 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn5(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn5 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn6(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn6 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn7(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn7 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn8(ch, depth-1)
+		}
+		<-ch
+	}
+	syntheticStackFn8 = func(ch <-chan struct{}, depth int) {
+		if depth > 0 {
+			syntheticStackFn0(ch, depth-1)
+		}
+		<-ch
+	}
+	var wg, setup sync.WaitGroup
+	setup.Add(numGoroutines)
+
+	blockCh := make(chan struct{})
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			setup.Done()
+
+			// Add labels if requested to some of the stacks.
+			if labels > 0 && (id%labels) > 0 {
+				SetGoroutineLabels(WithLabels(context.Background(), Labels("group", strconv.Itoa(id%labels))))
+			}
+			// Add a little variation to the depth.
+			depth := minDepth + (id % 7)
+			switch id % 9 {
+			case 0:
+				syntheticStackFn0(blockCh, depth)
+			case 1:
+				syntheticStackFn1(blockCh, depth)
+			case 2:
+				syntheticStackFn2(blockCh, depth)
+			case 3:
+				syntheticStackFn3(blockCh, depth)
+			case 4:
+				syntheticStackFn4(blockCh, depth)
+			case 5:
+				syntheticStackFn5(blockCh, depth)
+			case 6:
+				syntheticStackFn6(blockCh, depth)
+			case 7:
+				syntheticStackFn7(blockCh, depth)
+			case 8:
+				syntheticStackFn8(blockCh, depth)
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines to reach blocking point
+	setup.Wait()
+
+	// Return cleanup function
+	return func() {
+		close(blockCh)
+		wg.Wait()
+	}
+}
+
+// goroutineInfo represents parsed information about a goroutine
+type goroutineInfo struct {
+	id      string
+	state   string
+	since   string
+	labels  string
+	stack   []string
+	created string
+	raw     string
+}
+
+// parseGoroutines parses goroutine profile output and returns a map of goroutine ID to info
+func parseGoroutines(t *testing.T, output string, elideArgs bool) map[string]goroutineInfo {
+	result := make(map[string]goroutineInfo)
+	r := regexp.MustCompile(`^(.+)(\(.*\))$`)
+	for _, block := range strings.Split(output, "\n\n") {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+
+		// Parse goroutine ID and state, optional block time, and optonal labels.
+		header := strings.TrimSuffix(lines[0], ":")
+
+		// First, extract any labels from the new format
+		var labels string
+		if idx := strings.Index(header, "{"); idx >= 0 {
+			header, labels = header[:idx], header[idx:]
+		}
+
+		parts := strings.SplitN(header, " ", 3)
+		if len(parts) != 3 {
+			t.Fatalf("Unexpected goroutine line format: %s", lines[0])
+		}
+		statParts := strings.SplitN(strings.TrimSuffix(strings.TrimPrefix(parts[2], "["), "]"), ", ", 2)
+
+		g := goroutineInfo{
+			id:     parts[1],
+			state:  statParts[0],
+			raw:    block,
+			labels: labels, // Use the extracted labels from new format
+		}
+		if len(statParts) > 1 {
+			g.since = statParts[1]
+		}
+
+		// Remove function arguments from the stack trace
+		for i := 1; i < len(lines); i++ {
+			if idx := strings.LastIndex(lines[i], " +0x"); idx >= 0 {
+				lines[i] = lines[i][:idx]
+			}
+			if elideArgs {
+				lines[i] = r.ReplaceAllString(lines[i], "$1")
+			}
+			if strings.Contains(lines[i], "runtime/pprof.writeGoroutine") ||
+				strings.Contains(lines[i], "runtime/pprof.writeGoroutineStacks") {
+				// Skip pprof internal calls and the following file line.
+				i++
+				continue
+			}
+			if strings.Contains(lines[i], "runtime/pprof.(*Profile).WriteTo") {
+				// Skip pprof WriteTo and its file line, *and the following frame*, as
+				// it is the caller which will differ across calls in the test.
+				i += 3
+				continue
+			}
+			g.stack = append(g.stack, lines[i])
+		}
+		result[g.id] = g
+	}
+
+	return result
+}
+
 var emptyCallStackTestRun int64
 
 // Issue 18836.

@@ -26,3 +26,11 @@ type BlockProfileRecord struct {
 	Cycles int64
 	Stack  []uintptr
 }
+
+type GoroutineInfo struct {
+	ID         uint64
+	State      string
+	CreatorID  uint64
+	CreationPC uintptr
+	WaitSince  int64  // approx time when the g became blocked, in nanoseconds
+}
