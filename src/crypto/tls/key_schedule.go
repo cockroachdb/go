@@ -63,7 +63,7 @@ func (c *cipherSuiteTLS13) expandLabel(secret []byte, label string, context []by
 	out := make([]byte, length)
 	n, err := hkdf.Expand(c.hash.New, secret, hkdfLabelBytes).Read(out)
 	if err != nil || n != length {
-		panic("tls: HKDF-Expand-Label invocation failed unexpectedly")
+		panic(fmt.Sprintf("tls: HKDF-Expand-Label invocation failed unexpectedly: %+v, n = %d", err, n))
 	}
 	return out
 }
