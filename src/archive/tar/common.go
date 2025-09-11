@@ -38,6 +38,7 @@ var (
 	errMissData        = errors.New("archive/tar: sparse file references non-existent data")
 	errUnrefData       = errors.New("archive/tar: sparse file contains unreferenced data")
 	errWriteHole       = errors.New("archive/tar: write non-NUL byte in sparse hole")
+	errSparseTooLong   = errors.New("archive/tar: sparse map too long")
 )
 
 type headerError []string
