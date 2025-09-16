@@ -62,7 +62,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	_ "unsafe"  // for go:linkname
+	_ "unsafe" // for go:linkname
 )
 
 // A Context carries a deadline, a cancellation signal, and other values across
@@ -372,6 +372,7 @@ type stopCtx struct {
 var goroutines atomic.Int32
 
 // &cancelCtxKey is the key that a cancelCtx returns itself for.
+//
 //go:linkname cancelCtxKey
 var cancelCtxKey int
 
