@@ -103,6 +103,25 @@ func TestYieldLocked(t *testing.T) {
 	<-c
 }
 
+func TestYield(t *testing.T) {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < runtime.GOMAXPROCS(0)*2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 1000; j++ {
+				if i%2 == 0 || j == 999 {
+					runtime.Yield()
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
 func TestGoroutineParallelism(t *testing.T) {
 	if runtime.NumCPU() == 1 {
 		// Takes too long, too easy to deadlock, etc.
