@@ -1,0 +1,4 @@
+pkg context, func PropagateCancel(Context, func()) bool #0
+pkg runtime, func BackgroundYield(int64) #0
+pkg runtime, func Grunningnanos() int64 #0
+pkg runtime, func NumRunnableGoroutines() (int, int) #0

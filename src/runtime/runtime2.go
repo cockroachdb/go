@@ -804,6 +804,10 @@ type schedt struct {
 	// Global runnable queue.
 	runq     gQueue
 	runqsize int32
+	// Global background-yield queue: goroutines that voluntarily yielded
+	// while the scheduler was busy. Does NOT contribute to runqsize.
+	bgq     gQueue
+	bgqsize int32
 
 	// disable controls selective disabling of the scheduler.
 	//
@@ -1099,6 +1103,7 @@ const (
 	waitReasonTraceProcStatus                         // "trace proc status"
 	waitReasonPageTraceFlush                          // "page trace flush"
 	waitReasonCoroutine                               // "coroutine"
+	waitReasonBackgroundYield                         // "background yield"
 	waitReasonGCWeakToStrongWait                      // "GC weak to strong wait"
 )
 
@@ -1140,6 +1145,7 @@ var waitReasonStrings = [...]string{
 	waitReasonTraceProcStatus:       "trace proc status",
 	waitReasonPageTraceFlush:        "page trace flush",
 	waitReasonCoroutine:             "coroutine",
+	waitReasonBackgroundYield:       "background yield",
 	waitReasonGCWeakToStrongWait:    "GC weak to strong wait",
 }
 

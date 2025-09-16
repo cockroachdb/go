@@ -353,6 +353,65 @@ func Gosched() {
 	mcall(gosched_m)
 }
 
+// BackgroundYield cooperatively yields but only if the scheduler is "busy".
+//
+// If there are any idle Ps this is a noop.
+//
+// If there are no idle Ps and the global run queue has runnable goroutines waiting,
+// the calling goroutine parks itself on a global 'background' queue, from which
+// goroutines are taken for scheduling only after other queues are checked. This
+// allows goroutines performing latency-insensitive "background" work to choose
+// points at which they can offer to yield to higher priority work if, but only
+// if, needed. While this can lead to starvation, it is explicitly elective on the
+// part of the calling goroutine, so it can choose where to yield (i.e. when not
+// holding locks or otherwise in a critical section that could cause priority
+// inversion).
+//
+// Passing a >= 0 minRunningNanos causes the calling goroutine to
+// additionally yield if there are no idle Ps and there are any goroutines
+// waiting *in the background* queue, so long as the calling goroutine has been
+// scheduled for at least the past duration. This allows the calling goroutine
+// to offer some degree of fairness among goroutines that opt in to yielding,
+// as otherwise yielding is only done based on the (non-background) run queue.
+//
+// This never yields if the calling goroutine is locked to an OS thread via
+// LockOSThread(); the caller must explicitly unlock before it can yield.
+//
+//go:nosplit
+func BackgroundYield(minRunningNanos int64) {
+	// Fast path: tiny, inlineable checks only.
+
+	// Check if we need to yield at all and early exit fast if not.
+	if sched.npidle.Load() > 0 {
+		return
+	}
+
+	gp := getg()
+	// Don't yield if locked to an OS thread or holding runtime locks.
+	if gp.lockedm != 0 || gp.m.lockedg != 0 || gp.m.locks > 0 {
+		return
+	}
+	if sched.runqsize > 0 || (gp.m.p != 0 && !runqempty(gp.m.p.ptr())) {
+		goto slow
+	}
+	if minRunningNanos >= 0 && sched.bgqsize > 0 && nanotime()-gp.lastsched >= minRunningNanos {
+		goto slow
+	}
+	return
+
+slow:
+	backgroundyield_slow(gp)
+}
+
+// Keep the heavy work (timeout check, park, locking) out of the inline path.
+//
+//go:noinline
+func backgroundyield_slow(gp *g) {
+	checkTimeouts()
+	// traceskip=1 so stacks show runtime.BackgroundYield
+	gopark(bgyield_put, nil, waitReasonBackgroundYield, traceBlockPreempted, 1)
+}
+
 // goschedguarded yields the processor like gosched, but also checks
 // for forbidden states and opts out of the yield in those cases.
 //
@@ -3445,6 +3504,30 @@ top:
 		}
 	}
 
+	// As a last resort before we give up the P, check bgq for yielded goroutines.
+	// Yielded goroutines were runnable but voluntarily deprioritized themselves
+	// to waiting instead by calling BackgroundYield. If we have nothing runnable
+	// we can bring a yielded goroutine back to runnable and run it.
+	if sched.bgqsize != 0 {
+		lock(&sched.lock)
+		bg := sched.bgq.pop()
+		if bg != nil {
+			sched.bgqsize--
+		}
+		unlock(&sched.lock)
+		if bg != nil {
+			// Transition from _Gwaiting (background yield) to _Grunnable.
+			trace := traceAcquire()
+			casgstatus(bg, _Gwaiting, _Grunnable)
+			if trace.ok() {
+				// Match other ready paths for trace visibility.
+				trace.GoUnpark(bg, 0)
+				traceRelease(trace)
+			}
+			return bg, false, false
+		}
+	}
+
 	// We have nothing to do.
 	//
 	// If we're in the GC mark phase, can safely scan and blacken objects,
@@ -3508,6 +3591,13 @@ top:
 		gp := globrunqget(pp, 0)
 		unlock(&sched.lock)
 		return gp, false, false
+	}
+	if sched.bgqsize != 0 {
+		// The non-locked read raced with yield; could dequeue and move it to
+		// running right here, but we can also just go back to top and let it get
+		// picked up on the next iteration now that our cached count is updated.
+		unlock(&sched.lock)
+		goto top
 	}
 	if !mp.spinning && sched.needspinning.Load() == 1 {
 		// See "Delicate dance" comment below.
@@ -7109,6 +7199,20 @@ func (q *gQueue) popList() gList {
 	stack := gList{q.head}
 	*q = gQueue{}
 	return stack
+}
+
+// bgyield_put is the gopark unlock function for BackgroundYield. It enqueues
+// the goroutine onto the global background queue. Returning true keeps the G
+// parked until another part of the scheduler makes it runnable again.
+// The G remains in _Gwaiting after this returns.
+//
+//go:nosplit
+func bgyield_put(gp *g, _ unsafe.Pointer) bool {
+	lock(&sched.lock)
+	sched.bgq.pushBack(gp)
+	sched.bgqsize++
+	unlock(&sched.lock)
+	return true
 }
 
 // A gList is a list of Gs linked through g.schedlink. A G can only be

@@ -201,6 +201,40 @@ func RunSchedLocalQueueEmptyTest(iters int) {
 	}
 }
 
+// RunBackgroundYieldQueueCheck exercises the background queue enqueue/dequeue
+// path used by BackgroundYield. It returns ok==true on success. If the
+// background queue is not empty when invoked it returns skipped==true so the
+// caller can retry or skip without perturbing the live scheduler state.
+func RunBackgroundYieldQueueCheck() (ok bool, skipped bool) {
+	lock(&sched.lock)
+	if sched.bgqsize != 0 {
+		unlock(&sched.lock)
+		return false, true
+	}
+	unlock(&sched.lock)
+
+	gp := new(g)
+	if !bgyield_put(gp, nil) {
+		return false, false
+	}
+
+	lock(&sched.lock)
+	defer unlock(&sched.lock)
+
+	if sched.bgqsize != 1 {
+		return false, false
+	}
+	popped := sched.bgq.pop()
+	if popped != gp {
+		return false, false
+	}
+	sched.bgqsize--
+	if sched.bgqsize != 0 {
+		return false, false
+	}
+	return true, false
+}
+
 var (
 	StringHash = stringHash
 	BytesHash  = bytesHash
