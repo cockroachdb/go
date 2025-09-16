@@ -389,6 +389,215 @@ func Gosched() {
 	mcall(gosched_m)
 }
 
+// Yield cooperatively yields if, and only if, the scheduler is "busy".
+//
+// This can be called by any work wishing to utilize strictly spare capacity
+// while minimizing the degree to which it delays other work from being promptly
+// scheduled.
+//
+// Yield is intended to have very low overhead, particularly in its no-op case
+// where there is idle capacity in the scheduler and the caller does not need to
+// yield. This should allow it to be called often, such as in the body of tight
+// loops, in any tasks wishing to yield promptly to any waiting work.
+//
+// When there is waiting work, the yielding goroutine may briefly be rescheduled
+// after it, or may, in some cases, be parked in a waiting 'yield' state until
+// the scheduler next has spare capacity to resume it. Yield does not guarantee
+// fairness or starvation-prevention: once a goroutine Yields(), it may remain
+// parked until the scheduler next has idle capacity. This means Yield can block
+// for unbounded durations in the presence of sustained over-saturation; callers
+// are responsible for deciding where to Yield() to avoid priority inversions.
+//
+// Yield will never park if the calling goroutine is locked to an OS thread.
+func Yield() {
+	// Common/fast case: do nothing if npidle is non-zero meaning there is
+	// an idle P so no reason to yield this one. Doing only this check here keeps
+	// Yield inlineable (~70 of 80 as of writing).
+	if sched.npidle.Load() == 0 {
+		maybeYield()
+	}
+}
+
+// maybeYield is called by Yield if npidle is zero, meaning there are no idle Ps
+// and thus there may be work to which the caller should yield. Such work could
+// be on this local runq of the caller's P, on the global runq, in the runq of
+// some other P, or even in the form of ready conns waiting to be noticed by a
+// netpoll which would then ready runnable goroutines.
+//
+// Keeping this function extremely cheap is essential: it must be cheap enough
+// that callers can call it in very tight loops, as very frequent calls ensure a
+// task wishing to yield when work is waiting will do so promptly. Checking the
+// runq of every P or calling netpoll are too expensive to do in every call, so
+// given intent is to bound how long work may wait, such checks only need to be
+// performed after some amount of time has elapsed (e.g. 0.25ms). To minimize
+// overhead when called at a higher frequency, this elapsed time is checked with
+// an exponential backoff.
+//
+// runqs are checked directly with non-atomic reads rather than runqempty: being
+// cheap is our top priority and a microsecond of staleness is fine as long as
+// the check does not get optimized out of a calling loop body (hence noinline).
+//
+//go:noinline
+func maybeYield() {
+	gp := getg()
+
+	// Don't park while locked to an OS thread.
+	if gp.lockedm != 0 {
+		return
+	}
+
+	// If the local P's runq ring buffer/next is non-empty, yield to waiting G.
+	if p := gp.m.p.ptr(); p.runqhead != p.runqtail || p.runnext != 0 {
+		// If there is work in the local P's runq, we can yield by just going to the
+		// back of the local P's runq via goyield: this achieves the same goal of
+		// letting waiting work run instead of us, but without parking on the global
+		// yieldq and potentially switching Ps. While that's our preferred choice,
+		// we want to avoid thrashing back and forth between multiple Yield-calling
+		// goroutines: in such a case it is better to just park one of them on the
+		// global yieldq so the other stops seeing it in the P's runq and yielding
+		// to it.
+		//
+		// To detect and break such thrashing, we set yieldchecks to 1 before
+		// calling goyield. If the other goroutine yields right back and we return
+		// here still seeing yieldchecks==1, that indicates thrashing, so we park
+		// instead. 1 is a valid packed prev+count value, with prev=0/count=1 so if
+		// we later call Yield with no local runq and fall through to the
+		// maybe-do-expensive-checks code below which will just increment it as
+		// usual; when count=3 it will compare `prev=0` to the clock and do a check.
+		if gp.yieldchecks == 1 {
+			yieldPark()
+			return
+		}
+		gp.yieldchecks = 1
+		// Go to the back of the local runq.
+		goyield()
+		return
+	}
+
+	// If the global runq is non-empty, park in the global yieldq right away: that
+	// is work someone needs to pick up and it might as well be our P. We could,
+	// potentially, directly claim it here and goyield or equivalently to try to
+	// remain on this P, but just parking and letting this P go to findRunnable
+	// avoids duplication of its logic and seems good enough.
+	if !sched.runq.empty() {
+		yieldPark()
+		return
+	}
+
+	// We didn't find anything via cheap O(1) checks of our runq or global runq
+	// but it is possible there are goroutines waiting in runqs of other Ps that
+	// are not being stolen by an idle P since the lack of idle Ps (npidle=0) is
+	// what got us here. Furthermore, given the lack of idle Ps, it is also
+	// possible that ready conns are waiting for a netpoll to notice them and
+	// ready their goroutines i.e. work to which we should then yield.
+	//
+	// Searching all runqs, and even more so netpoll, is too expensive for every
+	// maybeYield call. Since our goal is to bound how long work could wait for
+	// yield-willing work to yeild to it what we instead can do is perform these
+	// more expensive checks when enough time has passed. We define "enough" as
+	// approximately 0.25ms: long enough to keep overhead paid by yield-willing
+	// work low enough that it can continue to check frequently, even for a caller
+	// in a tight loop, while still below the typical latencies of e.g. network
+	// services and far below the default non-cooperative preemption interval.
+	//
+	// To determine if it is time to do expensive checks, we compare the current
+	// time to the time we last checked, quantizing both by discarding the lower
+	// 18 bits to arrive at that approx 0.25ms resolution. However even just
+	// checking the current time is too expensive to do on every call in a hot
+	// enough loop. Thus, if we are being called much more frequently than these
+	// 0.25ms intervals, we can start checking the time less often instead of in
+	// every call, backing off exponentially. Specifically, we can maintain a
+	// calls-since-last-expensive-check counter and only check the clock when that
+	// counter is of the form 2^k-1 (i.e. 1, 3, 7, 15, ...). This approach should
+	// ensure a very frequent caller doesn't pay undue clock check overhead, while
+	// an infrequent caller still checks often enough. NB: We choose -1 here
+	// specifically so that the branch doing this check can also check for an
+	// imminent counter overflow rather than checking for that separately on every
+	// call.
+	//
+	// Both this call counter and the quantized timestamp are packed into a single
+	// uint32 (yieldchecks): the upper 21 bits store the low bits of the quantized
+	// timestamp and the lower 11 bits store the call counter. Given the counter
+	// resets to half its value when saturated (at 2k-1), this results in
+	// plateauing at a rate of 1 clock check per ~1k calls if called in a very
+	// tight loop.
+	//
+	// Note: 21 bits gives us ~2M distinct 0.25ms quantized times before we wrap
+	// around once every ~9 minutes. Since we compare exact equality, one would
+	// need to not check the clock at all for ~9mins, then check it on the exact
+	// 0.25ms tick to not see it change. To not check it at all for 9mins would
+	// imply a dramatic reduction in Yield call frequency; given frequent calls
+	// are what make Yield effective, this is not a practical concern.
+	const yieldCountBits, yieldCountMask = 11, (1 << 11) - 1
+	const yieldEpochShift = 18 - yieldCountBits // net right shift, accounting for 11 bits being masked out.
+	gp.yieldchecks++
+	// When the call counter -- masked out of the low 11 bits -- is of the form
+	// 2^k-1, check the time.
+	if count := gp.yieldchecks & yieldCountMask; (count & (count + 1)) == 0 {
+		// prev is just the quantized last check time with the counter masked out.
+		prev := gp.yieldchecks &^ yieldCountMask
+		// Rather than shift down all 18 to quantize and then just shift back up 11
+		// to make room for the counter, we can just shift down by the difference of
+		// 7 and let the masking of the remaining 11 zero them out.
+		now := uint32(nanotime()>>yieldEpochShift) &^ yieldCountMask
+		if now != prev {
+			gp.yieldchecks = now
+			// Check runqs of all Ps; if we find in them anything, park this g to free
+			// up this P to go to findRunnable and try to steal.
+			for i := range allp {
+				// We don't need the extra accuracy (and cost) of runqempty here either;
+				// a racing steal or enqueue will get noticed when we next findRunnable
+				// or next check yield.
+				if allp[i].runqhead != allp[i].runqtail || allp[i].runnext != 0 {
+					yieldPark()
+					return
+				}
+			}
+
+			// Check netpoll; a ready conn is basically a should-be-runnable goroutine
+			// to which we would yield if it had been readied, but the lack of idle Ps
+			// may mean nobody is checking this as often right now and there may be
+			// ready conns waiting.
+			if netpollinited() && netpollAnyWaiters() && sched.lastpoll.Load() != 0 {
+				var found bool
+				systemstack(func() {
+					if list, delta := netpoll(0); !list.empty() {
+						injectglist(&list)
+						netpollAdjustWaiters(delta)
+						found = true
+					}
+				})
+				if found {
+					// Since there were no idle Ps to get here, we can assume injectglist
+					// put runnable Gs on our local runq, to which we can just goyield.
+					goyield()
+				}
+			}
+		} else if count == yieldCountMask {
+			// Counter has saturated; reset counter bits to half saturation.
+			gp.yieldchecks = prev | (yieldCountMask / 2)
+		}
+	}
+}
+
+// yieldPark parks the current goroutine in a waiting state with reason yield
+// and puts it in the yieldq queue for findRunnable to retrieve at a later time
+// when the scheduler determines it has spare capacity. A goroutine parked by
+// Yield is no longer considered runnable and is instead waiting. One could ask
+// how this is different from a "runnable" goroutine waiting to run in a runq --
+// both are ready to run whenever the scheduler elects to run them -- but the
+// yielded goroutine has specifically opted to *block* until the scheduler next
+// has strictly spare capacity, in contrast to runnable goroutines which expect
+// to be run as soon as possible, perhaps even at the expense of running other
+// goroutines at that time. Reflecting this "blocked until something changes" in
+// its status -- particularly as it could end up spending significant time
+// waiting here, on the same order as other waiting states like blocking on IO
+// or locks -- better reflects the reality of its state.
+func yieldPark() {
+	checkTimeouts()
+	gopark(yield_put, nil, waitReasonYield, traceBlockPreempted, 1)
+}
+
 // goschedguarded yields the processor like gosched, but also checks
 // for forbidden states and opts out of the yield in those cases.
 //
@@ -3546,6 +3755,23 @@ top:
 		}
 	}
 
+	// Nothing runnable, so check for yielded goroutines parked in yieldq.
+	if !sched.yieldq.empty() {
+		lock(&sched.lock)
+		bg := sched.yieldq.pop()
+		unlock(&sched.lock)
+		if bg != nil {
+			trace := traceAcquire()
+			casgstatus(bg, _Gwaiting, _Grunnable)
+			if trace.ok() {
+				// Match other ready paths for trace visibility.
+				trace.GoUnpark(bg, 0)
+				traceRelease(trace)
+			}
+			return bg, false, false
+		}
+	}
+
 	// We have nothing to do.
 	//
 	// If we're in the GC mark phase, can safely scan and blacken objects,
@@ -3615,6 +3841,12 @@ top:
 			throw("Couldn't put Gs into empty local runq")
 		}
 		return gp, false, false
+	}
+
+	// Re-check yieldq again, this time while holding sched.lock.
+	if !sched.yieldq.empty() {
+		unlock(&sched.lock)
+		goto top
 	}
 	if !mp.spinning && sched.needspinning.Load() == 1 {
 		// See "Delicate dance" comment below.
@@ -7414,6 +7646,20 @@ func (q *gQueue) popList() gList {
 	stack := gList{q.head, q.size}
 	*q = gQueue{}
 	return stack
+}
+
+// yield_put is the gopark unlock function for Yield. It enqueues the goroutine
+// onto the global yield queue. Returning true keeps the G parked until another
+// part of the scheduler makes it runnable again. The G remains in _Gwaiting
+// after this returns. Nothing else will find/ready this G in the interim since
+// it isn't on a runq until we put it on the yieldq for findRunnable to find.
+//
+//go:nosplit
+func yield_put(gp *g, _ unsafe.Pointer) bool {
+	lock(&sched.lock)
+	sched.yieldq.pushBack(gp)
+	unlock(&sched.lock)
+	return true
 }
 
 // A gList is a list of Gs linked through g.schedlink. A G can only be
