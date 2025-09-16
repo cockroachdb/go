@@ -801,9 +801,22 @@ type schedt struct {
 	nmspinning   atomic.Int32  // See "Worker thread parking/unparking" comment in proc.go.
 	needspinning atomic.Uint32 // See "Delicate dance" comment in proc.go. Boolean. Must hold sched.lock to set to 1.
 
+	// ngqueued is a rough apprximation of the number of goroutines waiting for
+	// scheduler capacity to run (incremented when an idle P is not found e.g. during wakep).
+	// It is used to signal scheduler exhaustion for cooperative yield decisions;
+	// it does not need to be exact as long as it broadly captures saturation.
+	ngqueued atomic.Uint32
+
 	// Global runnable queue.
 	runq     gQueue
 	runqsize int32
+
+	// yieldq holds goroutines that voluntarily yielded due to the scheduler
+	// reporting capacity exhaustion. These were (are) runnable, but have moved to
+	// waiting while they "block" on "spare" scheduler capacity opening up. Does NOT
+	// contribute to runqsize.
+	yieldq     gQueue
+	yieldqsize int32
 
 	// disable controls selective disabling of the scheduler.
 	//
@@ -1099,6 +1112,7 @@ const (
 	waitReasonTraceProcStatus                         // "trace proc status"
 	waitReasonPageTraceFlush                          // "page trace flush"
 	waitReasonCoroutine                               // "coroutine"
+	waitReasonYield                                   // "yield"
 	waitReasonGCWeakToStrongWait                      // "GC weak to strong wait"
 )
 
@@ -1140,6 +1154,7 @@ var waitReasonStrings = [...]string{
 	waitReasonTraceProcStatus:       "trace proc status",
 	waitReasonPageTraceFlush:        "page trace flush",
 	waitReasonCoroutine:             "coroutine",
+	waitReasonYield:                 "yield",
 	waitReasonGCWeakToStrongWait:    "GC weak to strong wait",
 }
 

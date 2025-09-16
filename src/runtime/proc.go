@@ -353,6 +353,106 @@ func Gosched() {
 	mcall(gosched_m)
 }
 
+// Yield cooperatively yields if, and only if, the scheduler is "busy".
+//
+// This can be called by any work wishing to utilize strictly spare capacity
+// while minimizing the degree to which it delays other work from being promptly
+// scheduled.
+//
+// Yield is intended to be very low overhead, particularly in the no-op case
+// where the scheduler is not at capacity, to ensure it can be called often
+// enough in tasks wishing to yield promptly to waiting work when needed.
+// needed. When the scheduler is busy, the yielded goroutine can be parked in a
+// waiting state until the scheduler has idle capacity again to resume it.
+//
+// A goroutine calling Yield may be parked in a yielded state for an arbitrary
+// amount of time as long as the scheduler remains busy; callers should consider
+// this when deciding where to and where not to yield, such as considering when
+// locks that are contended by other work might be held.
+//
+// Yield will never park if the calling goroutine is locked to an OS thread.
+//
+// go:nosplit
+func Yield() {
+	// Common/fast case: do nothing if ngqueued is zero. Doing only this check here
+	// and leaving more detailed decisions to yield_slow keeps this wrapper
+	// inlineable (complexity cost as of writing is 70 out of the allowed 80).
+	if sched.ngqueued.Load() != 0 {
+		yield_slow()
+	}
+}
+
+// yield_slow is intended to be called after a check of ngqueued suggests that
+// yielding would be appreciated to determine how to actually yield (to P's
+// local runq vs parking in yieldq). It is split out to ensure Yield() and its
+// cheap check of ngqueued remains inlineable.
+//
+// If there is work on the local runq, the cheapest option is to just hop behind
+// it in the local runq to let it run and then pick back up. However this will
+// end up thrashing if the work we yield to also then yields right back. We
+// don't mark goroutines in any way when they yield so we cannot directly detech
+// if the next goroutine in our local runq got there via a yield/will yield
+// back, so we can use a heuristic: if we ran for <100us, it is possible we are
+// thrashing so we can go park in the yieldq to let the remaining local runq
+// work drain.
+//
+// If there is no work in the local and global run queues but ngqueued got us
+// here, it is likely there is work on a different P's local queue: we could
+// immediately park in the yieldq to free this P to go try to steal, but we
+// would prefer that the work currently running on that P yield to it (or
+// finish/block/be preempted) instead of parking this work, stealing that work,
+// and then unparking this work again.
+//
+// At the same time, we *do* want to yield -- that's why we are here -- if there
+// is work waiting for a chance to run. We can balance our preference to give
+// the other P a chance to just run it vs not making it wait too longwith a
+// heuristic: an ideal one might use how long that work has been waiting (either
+// by changing ngqueued to be a time or by locally remembering when/how many times
+// we see it non-zero), but a simple rule that uses the existing fields for now
+// is just to go park if we have been running for 1ms: this bounds how long we
+// defer parking (to at most 1ms) and while we might park immediately if we were
+// already running >1ms before ngqueued was set, at least the fact we ran for 1ms
+// means the overhead of parking and unparking may be proportionally lower.
+//
+// If the global runq has work, we always park right away, as unlike the other-P
+// local runq case, there isn't a P we think is better suited to running it, so
+// we should just do it.
+func yield_slow() {
+	gp := getg()
+
+	running := nanotime() - gp.lastsched
+	if !runqempty(gp.m.p.ptr()) {
+		if running > 100_000 { // 100us
+			goyield()
+			return
+		}
+	} else if sched.runqsize == 0 && running < 1_000_000 { // 1ms
+		return
+	}
+
+	// Don't park while locked to an OS thread.
+	if gp.lockedm != 0 {
+		return
+	}
+
+	// Eagerly decrement ngqueued; we could leave it for findRunnable to reset it
+	// next time it finds no work, but there could be a thundering herd of yields
+	// in the meantime; we know we're parking to go find _some_ work so we can
+	// decrement it by one right away. This decrement does race with the reset in
+	// findRunnable, so if we notice it go negative, just reset it and skip yield.
+	// Of course that too races with a concurrent increment but that's fine -
+	// it is an approximate signal anyway.
+	if sched.ngqueued.Add(-1) < 0 {
+		sched.ngqueued.Store(0)
+		return
+	}
+
+	checkTimeouts()
+
+	// traceskip=1 so stacks show runtime.Yield
+	gopark(yield_put, nil, waitReasonYield, traceBlockPreempted, 1)
+}
+
 // goschedguarded yields the processor like gosched, but also checks
 // for forbidden states and opts out of the yield in those cases.
 //
@@ -3165,6 +3265,7 @@ func wakep() {
 	lock(&sched.lock)
 	pp, _ = pidlegetSpinning(0)
 	if pp == nil {
+		sched.ngqueued.Add(1)
 		if sched.nmspinning.Add(-1) < 0 {
 			throw("wakep: negative nmspinning")
 		}
@@ -3445,6 +3546,29 @@ top:
 		}
 	}
 
+	sched.ngqueued.Store(0)
+
+	// As a last resort before we give up the P, try yieldq.
+	if sched.yieldqsize != 0 {
+		lock(&sched.lock)
+		bg := sched.yieldq.pop()
+		if bg != nil {
+			sched.yieldqsize--
+		}
+		unlock(&sched.lock)
+		if bg != nil {
+			// Transition from _Gwaiting (yield) to _Grunnable.
+			trace := traceAcquire()
+			casgstatus(bg, _Gwaiting, _Grunnable)
+			if trace.ok() {
+				// Match other ready paths for trace visibility.
+				trace.GoUnpark(bg, 0)
+				traceRelease(trace)
+			}
+			return bg, false, false
+		}
+	}
+
 	// We have nothing to do.
 	//
 	// If we're in the GC mark phase, can safely scan and blacken objects,
@@ -3508,6 +3632,10 @@ top:
 		gp := globrunqget(pp, 0)
 		unlock(&sched.lock)
 		return gp, false, false
+	}
+	if sched.yieldqsize != 0 {
+		unlock(&sched.lock)
+		goto top
 	}
 	if !mp.spinning && sched.needspinning.Load() == 1 {
 		// See "Delicate dance" comment below.
@@ -3666,6 +3794,7 @@ top:
 		unlock(&sched.lock)
 		if pp == nil {
 			injectglist(&list)
+			sched.ngqueued.Add(1)
 			netpollAdjustWaiters(delta)
 		} else {
 			acquirep(pp)
@@ -4889,6 +5018,7 @@ func exitsyscall0(gp *g) {
 	var locked bool
 	if pp == nil {
 		globrunqput(gp)
+		sched.ngqueued.Add(1)
 
 		// Below, we stoplockedm if gp is locked. globrunqput releases
 		// ownership of gp, so we must check if gp is locked prior to
@@ -7109,6 +7239,20 @@ func (q *gQueue) popList() gList {
 	stack := gList{q.head}
 	*q = gQueue{}
 	return stack
+}
+
+// yield_put is the gopark unlock function for Yield. It enqueues the goroutine
+// onto the global yield queue. Returning true keeps the G parked until another
+// part of the scheduler makes it runnable again. The G remains in _Gwaiting
+// after this returns.
+//
+//go:nosplit
+func yield_put(gp *g, _ unsafe.Pointer) bool {
+	lock(&sched.lock)
+	sched.yieldq.pushBack(gp)
+	sched.yieldqsize++
+	unlock(&sched.lock)
+	return true
 }
 
 // A gList is a list of Gs linked through g.schedlink. A G can only be
