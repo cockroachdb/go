@@ -512,6 +512,8 @@ type g struct {
 	lastsched     int64 // timestamp when the G last started running
 	runningnanos  int64 // wall time spent in the running state
 
+	yieldchecks uint32 // a packed approx time and count of maybeYield checks.
+
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile
 	goroutineProfiled goroutineProfileStateHolder
@@ -804,6 +806,10 @@ type schedt struct {
 	// Global runnable queue.
 	runq     gQueue
 	runqsize int32
+
+	// Global background-yield queue: goroutines that voluntarily yielded
+	// while the scheduler was busy. Does NOT contribute to runqsize.
+	yieldq gQueue
 
 	// disable controls selective disabling of the scheduler.
 	//
@@ -1099,6 +1105,7 @@ const (
 	waitReasonTraceProcStatus                         // "trace proc status"
 	waitReasonPageTraceFlush                          // "page trace flush"
 	waitReasonCoroutine                               // "coroutine"
+	waitReasonYield                                   // "yield"
 	waitReasonGCWeakToStrongWait                      // "GC weak to strong wait"
 )
 
@@ -1140,6 +1147,7 @@ var waitReasonStrings = [...]string{
 	waitReasonTraceProcStatus:       "trace proc status",
 	waitReasonPageTraceFlush:        "page trace flush",
 	waitReasonCoroutine:             "coroutine",
+	waitReasonYield:                 "yield",
 	waitReasonGCWeakToStrongWait:    "GC weak to strong wait",
 }
 
