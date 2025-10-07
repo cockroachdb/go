@@ -264,7 +264,7 @@ func (name handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		runtime.GC()
 	}
 	debug, _ := strconv.Atoi(r.FormValue("debug"))
-	if debug != 0 {
+	if debug != 0 && !(name == "goroutine" && debug == 3) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")

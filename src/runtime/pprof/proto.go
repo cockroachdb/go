@@ -177,6 +177,14 @@ func (b *profileBuilder) pbLabel(tag int, key, str string, num int64) {
 	b.pb.endMessage(tag, start)
 }
 
+// pbLabel encodes a Label message to b.pb, with only a num component.
+func (b *profileBuilder) pbLabelNum(tag int, key string, num int64) {
+	start := b.pb.startMessage()
+	b.pb.int64Opt(tagLabel_Key, b.stringIndex(key))
+	b.pb.int64Opt(tagLabel_Num, num)
+	b.pb.endMessage(tag, start)
+}
+
 // pbLine encodes a Line message to b.pb.
 func (b *profileBuilder) pbLine(tag int, funcID uint64, line int64) {
 	start := b.pb.startMessage()

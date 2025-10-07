@@ -1219,24 +1219,8 @@ func goroutineheader(gp *g) {
 	isScan := gpstatus&_Gscan != 0
 	gpstatus &^= _Gscan // drop the scan bit
 
-	// Basic string status
-	var status string
-	if 0 <= gpstatus && gpstatus < uint32(len(gStatusStrings)) {
-		status = gStatusStrings[gpstatus]
-	} else {
-		status = "???"
-	}
-
-	// Override.
-	if (gpstatus == _Gwaiting || gpstatus == _Gleaked) && gp.waitreason != waitReasonZero {
-		status = gp.waitreason.String()
-	}
-
 	// approx time the G is blocked, in minutes
-	var waitfor int64
-	if (gpstatus == _Gwaiting || gpstatus == _Gsyscall) && gp.waitsince != 0 {
-		waitfor = (nanotime() - gp.waitsince) / 60e9
-	}
+
 	print("goroutine ", gp.goid)
 	if gp.m != nil && gp.m.throwing >= throwTypeRuntime && gp == gp.m.curg || level >= 2 {
 		print(" gp=", gp)
@@ -1246,6 +1230,7 @@ func goroutineheader(gp *g) {
 			print(" m=nil")
 		}
 	}
+	status := gStatusString(gpstatus, gp.waitreason)
 	print(" [", status)
 	if gpstatus == _Gleaked {
 		print(" (leaked)")
@@ -1261,7 +1246,7 @@ func goroutineheader(gp *g) {
 		// suffix to distinguish it from the non-durable form, add it here.
 		print(" (durable)")
 	}
-	if waitfor >= 1 {
+	if waitfor := gWaitFor(gpstatus, gp.waitsince); waitfor >= 1 {
 		print(", ", waitfor, " minutes")
 	}
 	if gp.lockedm != 0 {
@@ -1271,6 +1256,38 @@ func goroutineheader(gp *g) {
 		print(", synctest bubble ", bubble.id)
 	}
 	print("]:\n")
+}
+
+//go:linkname pprof_gWaitFor
+func pprof_gWaitFor(gpstatus uint32, waitsince int64) int64 {
+	return gWaitFor(gpstatus, waitsince)
+}
+
+//go:linkname pprof_gStatusString
+func pprof_gStatusString(gpstatus uint32, reason waitReason) string {
+	return gStatusString(gpstatus, reason)
+}
+
+// gStatusString returns a string representing the status of a goroutine.
+func gStatusString(gpstatus uint32, reason waitReason) string {
+	var status string
+	if gpstatus < uint32(len(gStatusStrings)) {
+		status = gStatusStrings[gpstatus]
+	} else {
+		status = "???"
+	}
+	if (gpstatus == _Gwaiting || gpstatus == _Gleaked) && reason != waitReasonZero {
+		status = reason.String()
+	}
+	return status
+}
+
+// gWaitFor returns the number of minutes that the goroutine has been waiting.
+func gWaitFor(gpstatus uint32, waitsince int64) int64 {
+	if (gpstatus == _Gwaiting || gpstatus == _Gsyscall) && waitsince != 0 {
+		return (nanotime() - waitsince) / 60e9
+	}
+	return 0
 }
 
 func tracebackothers(me *g) {
