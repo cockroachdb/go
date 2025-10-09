@@ -5,6 +5,9 @@
 package x509
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/asn1"
 	"testing"
 
