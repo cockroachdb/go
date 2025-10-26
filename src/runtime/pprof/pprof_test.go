@@ -1571,7 +1571,7 @@ func TestGoroutineProfileConcurrency(t *testing.T) {
 	goroutineProf := Lookup("goroutine")
 
 	profilerCalls := func(s string) int {
-		return strings.Count(s, "\truntime/pprof.runtime_goroutineProfileWithLabels+")
+		return strings.Count(s, "\truntime/pprof.runtime_goroutineProfile+")
 	}
 
 	includesFinalizerOrCleanup := func(s string) bool {
@@ -1928,6 +1928,195 @@ func BenchmarkGoroutine(b *testing.B) {
 		b.Run(fmt.Sprintf("Profile.WriteTo idle %d", n), withIdle(n, benchWriteTo))
 		b.Run(fmt.Sprintf("Profile.WriteTo churn %d", n), withIdle(n, withChurn(benchWriteTo)))
 		b.Run(fmt.Sprintf("runtime.GoroutineProfile churn %d", n), withIdle(n, withChurn(benchGoroutineProfile)))
+	}
+}
+
+func TestGoroutineProfileDebug3Creators(t *testing.T) {
+	// Create synthetic goroutines using the helper
+	cleanup := createSyntheticGoroutines(10, 2)
+	defer cleanup()
+
+	p := Lookup("goroutine")
+
+	// Establish a created-by mapping by parsing a debug=2 profile.
+	createdBy := make(map[string]string)
+	var buf bytes.Buffer
+	err := p.WriteTo(&buf, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, goroutine := range strings.Split(buf.String(), "\n\n") {
+		parts := strings.SplitN(goroutine, " ", 3)
+		for _, l := range strings.Split(parts[2], "\n") {
+			if c := strings.Split(l, "in goroutine "); len(c) > 1 {
+				createdBy[parts[1]] = c[1]
+			}
+		}
+	}
+
+	// Verify the debug=3 format of said profile has matching ID and creator labels.
+	buf.Reset()
+	err = p.WriteTo(&buf, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := profile.Parse(&buf)
+	if err != nil {
+		t.Fatalf("failed to parse profile: %v", err)
+	}
+	if e, g := len(createdBy), len(parsed.Sample); e > g {
+		t.Fatalf("expected %d goroutines, got %d", e, g)
+	}
+	for _, s := range parsed.Sample {
+		id := strconv.Itoa(int(s.NumLabel["go::goroutine"][0]))
+		got := s.NumLabel["go::goroutine_created_by"]
+		if createdBy[id] == "" {
+			if len(got) != 0 {
+				t.Fatalf("goroutine %s: got created_by %q, want none", id, got)
+			}
+		} else {
+			if e := createdBy[id]; len(got) != 1 || strconv.Itoa(int(got[0])) != e {
+				t.Fatalf("goroutine %s: got created_by %q, want %q", id, got, e)
+			}
+		}
+	}
+}
+
+// BenchmarkGoroutineProfileLatencyImpact measures the latency impact on *other*
+// running goroutines during goroutine profile collection, when variable numbers
+// of other goroutines are profiled. This focus on the observed latency of in
+// other goroutines is what differentiates this benchmark from other benchmarks
+// of goroutine profiling, such as BenchmarkGoroutine, that measure the
+// the performance of profiling itself rather than its impact on the performance
+// of concurrently executing goroutines.
+func BenchmarkGoroutineProfileLatencyImpact(b *testing.B) {
+	for _, numGoroutines := range []int{100, 1000, 10000} {
+		for _, withDepth := range []int{3, 10, 50} {
+			b.Run(fmt.Sprintf("goroutines=%dx%d", numGoroutines, withDepth), func(b *testing.B) {
+				// Setup synthetic blocked goroutines using helper
+				cleanup := createSyntheticGoroutines(numGoroutines, withDepth)
+				defer cleanup()
+				for _, debug := range []int{-1, 1, 2, 3} {
+					name := fmt.Sprintf("debug=%d", debug)
+					if debug < 0 {
+						name = "debug=none"
+					}
+					b.Run(name, func(b *testing.B) {
+						// Launch latency probe goroutines.
+						const numProbes = 3
+						probeStop := make(chan struct{})
+						var probeWg, probesReady sync.WaitGroup
+						probes := make([]time.Duration, numProbes)
+						for prober := 0; prober < numProbes; prober++ {
+							probeWg.Add(1)
+							probesReady.Add(1)
+							go func(idx int) {
+								defer probeWg.Done()
+								probesReady.Done()
+								for {
+									select {
+									case <-probeStop:
+										return
+									default:
+										last := time.Now()
+										for i := 0; i < 20; i++ {
+											latency := time.Since(last)
+											last = time.Now()
+											if probes[idx] < latency {
+												probes[idx] = latency
+											}
+										}
+									}
+								}
+							}(prober)
+						}
+						probesReady.Wait()
+						b.ResetTimer()
+						for i := 0; i < b.N; i++ {
+							if debug >= 0 {
+								time.Sleep(3 * time.Millisecond)
+								var buf bytes.Buffer
+								err := Lookup("goroutine").WriteTo(&buf, debug)
+								if err != nil {
+									b.Fatalf("Profile failed: %v", err)
+								}
+								time.Sleep(3 * time.Millisecond)
+							} else {
+								// Just observe the probes without a profile interrupting them.
+								time.Sleep(6 * time.Millisecond)
+							}
+						}
+						b.StopTimer()
+						close(probeStop)
+						probeWg.Wait()
+
+						var probeMax time.Duration
+						for _, probe := range probes {
+							if probe > probeMax {
+								probeMax = probe
+							}
+						}
+						b.ReportMetric(float64(probeMax), "max_latency_ns")
+					})
+				}
+			})
+		}
+	}
+}
+
+// createSyntheticGoroutines creates a requested number of goroutines to provide
+// testdata against which various goroutine profiling mechanisms such as
+// pprof.Lookup("goroutine").WriteTo(debug=1/2) can be tested or benchmarked.
+// After the requested goroutines are started it returns a cleanup function to
+// stop them. The created goroutines vary their stacks across several sythnetic
+// functions, with a minimum stack depth controlled by minDepth.
+func createSyntheticGoroutines(numGoroutines, minDepth int) func() {
+	var syntheticFn0, syntheticFn1, syntheticFn2 func(<-chan struct{}, int)
+
+	syntheticFn0 = func(ch <-chan struct{}, d int) {
+		if d > 0 {
+			syntheticFn1(ch, d-1)
+		}
+		<-ch
+	}
+	syntheticFn1 = func(ch <-chan struct{}, d int) {
+		if d > 0 {
+			syntheticFn2(ch, d-1)
+		}
+		<-ch
+	}
+	syntheticFn2 = func(ch <-chan struct{}, d int) {
+		if d > 0 {
+			syntheticFn0(ch, d-1)
+		}
+		<-ch
+	}
+
+	var wg, setup sync.WaitGroup
+	setup.Add(numGoroutines)
+	blockCh := make(chan struct{})
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			setup.Done()
+			depth := minDepth + (id % 7)
+			switch id % 4 {
+			case 0:
+				syntheticFn0(blockCh, depth)
+			case 1:
+				syntheticFn1(blockCh, depth)
+			case 2:
+				syntheticFn2(blockCh, depth)
+			}
+		}(i)
+	}
+	setup.Wait()
+
+	return func() {
+		close(blockCh)
+		wg.Wait()
 	}
 }
 
