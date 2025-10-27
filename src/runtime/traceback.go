@@ -1264,7 +1264,21 @@ func goroutineheader(gp *g) {
 	if bubble := gp.bubble; bubble != nil {
 		print(", synctest bubble ", bubble.id)
 	}
+	if gp.labels != nil {
+		printLabelMap(gp.labels)
+	}
 	print("]:\n")
+}
+
+// printLabelMap prints a pprof.labelMap while avoiding a dependency on pprof.
+func printLabelMap(p unsafe.Pointer) {
+	if p == nil {
+		return
+	}
+	// This must match the layout of pprof/label.go's labelMap and labelSet.
+	for _, lbl := range *(*([]struct{ k, v string }))(p) {
+		print(`, "`, lbl.k, `":"`, lbl.v, `"`)
+	}
 }
 
 func tracebackothers(me *g) {

@@ -6,12 +6,14 @@ package runtime_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"internal/abi"
 	"internal/testenv"
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -866,4 +868,16 @@ func TestTracebackGeneric(t *testing.T) {
 			t.Errorf("traceback contains shape name: got\n%s", got)
 		}
 	}
+}
+
+func TestTracebackContainsLabels(t *testing.T) {
+	pprof.Do(context.Background(), pprof.Labels("foolabel", "barvalue"), func(_ context.Context) {
+		buf := make([]byte, 1<<10)
+		n := runtime.Stack(buf, false)
+		header := strings.Split(string(buf[:n]), "\n")[0]
+		t.Log(header)
+		if !strings.Contains(header, `"foolabel":"barvalue"`) {
+			t.Errorf("stack does not contain label:\n%s", string(buf[:n]))
+		}
+	})
 }
