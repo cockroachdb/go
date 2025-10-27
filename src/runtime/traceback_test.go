@@ -6,12 +6,14 @@ package runtime_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"internal/abi"
 	"internal/testenv"
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -866,4 +868,45 @@ func TestTracebackGeneric(t *testing.T) {
 			t.Errorf("traceback contains shape name: got\n%s", got)
 		}
 	}
+}
+
+func TestTracebackContainsLabels(t *testing.T) {
+	pprof.Do(context.Background(), pprof.Labels("foolabel", "barvalue"), func(_ context.Context) {
+		buf := make([]byte, 1<<10)
+		n := runtime.Stack(buf, false)
+		header := strings.Split(string(buf[:n]), "\n")[0]
+		t.Log(header)
+		if !strings.Contains(header, "foolabel:barvalue") {
+			t.Errorf("stack does not contain label:\n%s", string(buf[:n]))
+		}
+	})
+
+	// Let's also check various label map sizes, from 0 up to 4000 label pairs.
+	pprof.Do(context.Background(), pprof.Labels("manual", "orig"), func(ctx context.Context) {
+		buf := make([]byte, 1<<20)
+		labels := make([]string, 4000*2)
+		for j := 0; j < len(labels)/2; j++ {
+			labels[j*2] = fmt.Sprintf("key%d", j)
+			labels[j*2+1] = fmt.Sprintf("value%d", j)
+		}
+
+		for i := 0; i < len(labels)/2; i++ {
+			pprof.Do(ctx, pprof.Labels(labels[:i*2]...), func(ctx context.Context) {
+				pprof.Do(ctx, pprof.Labels("manual", "override"), func(ctx context.Context) {
+					n := runtime.Stack(buf, false)
+					header := strings.Split(string(buf[:n]), "\n")[0]
+					// Probe log n labels to check for correctness.
+					for j := 1; j < i; j *= 2 {
+						want := fmt.Sprintf("key%d:value%d", j, j)
+						if !strings.Contains(header, want) {
+							t.Fatalf("stack does not contain label %q:\n%s", want, string(buf[:n]))
+						}
+					}
+					if !strings.Contains(header, "manual:override") {
+						t.Fatalf("stack does not contain label %q:\n%s", "manual:override", string(buf[:n]))
+					}
+				})
+			})
+		}
+	})
 }

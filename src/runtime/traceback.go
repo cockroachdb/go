@@ -1239,7 +1239,87 @@ func goroutineheader(gp *g) {
 	if gp.lockedm != 0 {
 		print(", locked to thread")
 	}
+	if gp.labels != nil {
+		printLabelMap(*(*map[string]string)(gp.labels))
+	}
 	print("]:\n")
+}
+
+// Mirror map.go's dataOffset when this helper isn't in map.go.
+const localDataOffset = unsafe.Offsetof(struct {
+	b bmap
+	x byte
+}{}.x)
+
+// printLabelMap is helper to print all entries of a map[string]string, i.e. a
+// pprof.labelMap, via lower-level, direct access to the underlying hmap. This
+// avoids a circular dependency on pprof's type and on normal map iteration, the
+// latter of which would include write barriers that are forbidden in places
+// that can call goroutineheader. This manual iteration assumes no concurrent
+// mutations (which is valid as these maps are immutable after assignment).
+//
+//go:nosplit
+//go:nowritebarrierrec
+func printLabelMap(m map[string]string) {
+	if m == nil {
+		return
+	}
+
+	hdr := *(*unsafe.Pointer)(unsafe.Pointer(&m))
+	if hdr == nil {
+		return
+	}
+	h := (*hmap)(hdr)
+	if h.count == 0 || h.buckets == nil {
+		return
+	}
+
+	var ei interface{} = m
+	t := (*maptype)(unsafe.Pointer((*eface)(unsafe.Pointer(&ei))._type))
+
+	keySlotSize, elemSlotSize := t.Key.Size(), t.Elem.Size()
+	if t.IndirectKey() {
+		keySlotSize = goarch.PtrSize
+	}
+	if t.IndirectElem() {
+		elemSlotSize = goarch.PtrSize
+	}
+
+	for i := uintptr(0); i < uintptr(1)<<h.B; i++ {
+		for b := (*bmap)(add(h.buckets, i*t.Bucket.Size())); b != nil; b = b.overflow(t) {
+			base := add(unsafe.Pointer(b), localDataOffset)
+			keysBase, valsBase := base, add(base, abi.MapBucketCount*keySlotSize)
+			for j := 0; j < abi.MapBucketCount; j++ {
+				if th := b.tophash[j]; isEmpty(th) {
+					continue
+				}
+
+				var k, v string
+				kaddr, vaddr := add(keysBase, uintptr(j)*keySlotSize), add(valsBase, uintptr(j)*elemSlotSize)
+				if t.IndirectKey() {
+					p := *(*unsafe.Pointer)(kaddr)
+					if p == nil {
+						continue
+					}
+					k = *(*string)(p)
+				} else {
+					k = *(*string)(kaddr)
+				}
+
+				if t.IndirectElem() {
+					p := *(*unsafe.Pointer)(vaddr)
+					if p == nil {
+						continue
+					}
+					v = *(*string)(p)
+				} else {
+					v = *(*string)(vaddr)
+				}
+
+				print(", \"", k, ":", v, "\"")
+			}
+		}
+	}
 }
 
 func tracebackothers(me *g) {
