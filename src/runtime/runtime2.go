@@ -485,6 +485,8 @@ type g struct {
 	sleepWhen       int64          // when to sleep until
 	selectDone      atomic.Uint32  // are we participating in a select and did someone win the race?
 
+	yieldchecks uint32 // a packed approx time and count of maybeYield checks; see Yield().
+
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile
 	goroutineProfiled goroutineProfileStateHolder
@@ -797,6 +799,10 @@ type schedt struct {
 	// Global runnable queue.
 	runq gQueue
 
+	// Global background-yield queue: goroutines that voluntarily yielded
+	// while the scheduler was busy. Does NOT contribute to runqsize.
+	yieldq gQueue
+
 	// disable controls selective disabling of the scheduler.
 	//
 	// Use schedEnableUser to control this.
@@ -1094,6 +1100,7 @@ const (
 	waitReasonTraceProcStatus                         // "trace proc status"
 	waitReasonPageTraceFlush                          // "page trace flush"
 	waitReasonCoroutine                               // "coroutine"
+	waitReasonYield                                   // "yield"
 	waitReasonGCWeakToStrongWait                      // "GC weak to strong wait"
 	waitReasonSynctestRun                             // "synctest.Run"
 	waitReasonSynctestWait                            // "synctest.Wait"
@@ -1144,6 +1151,7 @@ var waitReasonStrings = [...]string{
 	waitReasonTraceProcStatus:       "trace proc status",
 	waitReasonPageTraceFlush:        "page trace flush",
 	waitReasonCoroutine:             "coroutine",
+	waitReasonYield:                 "yield",
 	waitReasonGCWeakToStrongWait:    "GC weak to strong wait",
 	waitReasonSynctestRun:           "synctest.Run",
 	waitReasonSynctestWait:          "synctest.Wait",
