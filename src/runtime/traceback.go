@@ -1316,7 +1316,7 @@ func printLabelMap(m map[string]string) {
 					v = *(*string)(vaddr)
 				}
 
-				print(", \"", k, ":", v, "\"")
+				print(", \"", k, "\":\"", v, "\"")
 			}
 		}
 	}

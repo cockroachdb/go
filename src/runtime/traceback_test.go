@@ -876,7 +876,7 @@ func TestTracebackContainsLabels(t *testing.T) {
 		n := runtime.Stack(buf, false)
 		header := strings.Split(string(buf[:n]), "\n")[0]
 		t.Log(header)
-		if !strings.Contains(header, "foolabel:barvalue") {
+		if !strings.Contains(header, `"foolabel":"barvalue"`) {
 			t.Errorf("stack does not contain label:\n%s", string(buf[:n]))
 		}
 	})
@@ -897,13 +897,13 @@ func TestTracebackContainsLabels(t *testing.T) {
 					header := strings.Split(string(buf[:n]), "\n")[0]
 					// Probe log n labels to check for correctness.
 					for j := 1; j < i; j *= 2 {
-						want := fmt.Sprintf("key%d:value%d", j, j)
+						want := fmt.Sprintf(`"key%d":"value%d"`, j, j)
 						if !strings.Contains(header, want) {
 							t.Fatalf("stack does not contain label %q:\n%s", want, string(buf[:n]))
 						}
 					}
-					if !strings.Contains(header, "manual:override") {
-						t.Fatalf("stack does not contain label %q:\n%s", "manual:override", string(buf[:n]))
+					if !strings.Contains(header, `"manual":"override"`) {
+						t.Fatalf("stack does not contain label %q:\n%s", `"manual":"override"`, string(buf[:n]))
 					}
 				})
 			})
