@@ -362,7 +362,9 @@ func (p *Profile) Remove(value any) {
 // The predefined profiles may assign meaning to other debug values;
 // for example, when printing the "goroutine" profile, debug=2 means to
 // print the goroutine stacks in the same form that a Go program uses
-// when dying due to an unrecovered panic.
+// when dying due to an unrecovered panic, and debug=3 means to output a
+// binary protobuf profile identical to debug=0, but with per-goroutine
+// details such as ID and status included as sample labels.
 func (p *Profile) WriteTo(w io.Writer, debug int) error {
 	if p.name == "" {
 		panic("pprof: use of zero Profile")
@@ -451,7 +453,55 @@ func printCountCycleProfile(w io.Writer, countName, cycleName string, records []
 
 // printCountProfile prints a countProfile at the specified debug level.
 // The profile will be in compressed proto format unless debug is nonzero.
+// Non-zero debug values have the following behaviors:
+//   - debug=1: text format, aggregated by unique stack, state and labels.
+//   - debug=2: handled elsewhere; the output of runtime.Stack().
+//   - debug=3: binary proto format-identical to debug=0 with per-goroutine labels.
 func printCountProfile(w io.Writer, debug int, name string, p countProfile) error {
+	// Debug >1 is non-aggregated, so branch immediately to avoid computing the
+	// aggregated map if we do not need it. This does duplicate a little of the
+	// logic for actually constructing and outputting the proto profile but only
+	// the helper calls so it is minimal and avoids a more complex structuring of
+	// one output path that handles both the aggregated and non-aggregated cases.
+	if debug == 3 {
+		// Output profile in protobuf form.
+		b := newProfileBuilder(w)
+		b.pbValueType(tagProfile_PeriodType, name, "count")
+		b.pb.int64Opt(tagProfile_Period, 1)
+		b.pbValueType(tagProfile_SampleType, name, "count")
+
+		values := []int64{1}
+		var locs []uint64
+		for i := 0; i < p.Len(); i++ {
+			locs = b.appendLocsForStack(locs[:0], p.Stack(i))
+			var g profilerecord.StackRecord
+			if goroutines, ok := p.(*runtimeProfile); ok {
+				g = goroutines.stk[i]
+			}
+			extra := func() {
+				// If the stackrecord has goroutine details (starting with ID), use them
+				// to synthesize labels.
+				if g.ID != 0 {
+					b.pbLabelNum(tagSample_Label, "go::goroutine", int64(g.ID))
+					if g.ID != 1 {
+						b.pbLabelNum(tagSample_Label, "go::goroutine_created_by", int64(g.CreatorID))
+					}
+					b.pbLabel(tagSample_Label, "go::goroutine_state", pprof_gStatusString(g.State, g.WaitReason), 0)
+					if mins := pprof_gWaitFor(g.State, g.WaitSince); mins > 0 {
+						b.pbLabelNum(tagSample_Label, "go::goroutine_wait_minutes", int64(mins))
+					}
+				}
+				if lbl := p.Label(i); lbl != nil {
+					for _, lbl := range lbl.list {
+						b.pbLabel(tagSample_Label, lbl.key, lbl.value, 0)
+					}
+				}
+			}
+			b.pbSample(values, locs, extra)
+		}
+		return b.build()
+	}
+
 	// Build count of each stack.
 	var buf strings.Builder
 	key := func(stk []uintptr, lbls *labelMap) string {
@@ -741,7 +791,7 @@ func countGoroutine() int {
 
 // writeGoroutine writes the current runtime GoroutineProfile to w.
 func writeGoroutine(w io.Writer, debug int) error {
-	if debug >= 2 {
+	if debug == 2 {
 		return writeGoroutineStacks(w)
 	}
 	return writeRuntimeProfile(w, debug, "goroutine", pprof_goroutineProfileWithLabels)
@@ -989,3 +1039,9 @@ func pprof_fpunwindExpand(dst, src []uintptr) int
 
 //go:linkname pprof_makeProfStack runtime.pprof_makeProfStack
 func pprof_makeProfStack() []uintptr
+
+//go:linkname pprof_gStatusString runtime.pprof_gStatusString
+func pprof_gStatusString(state uint32, reason uint8) string
+
+//go:linkname pprof_gWaitFor runtime.pprof_gWaitFor
+func pprof_gWaitFor(gpstatus uint32, waitsince int64) int64
