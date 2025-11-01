@@ -1218,23 +1218,10 @@ func goroutineheader(gp *g) {
 	gpstatus &^= _Gscan // drop the scan bit
 
 	// Basic string status
-	var status string
-	if 0 <= gpstatus && gpstatus < uint32(len(gStatusStrings)) {
-		status = gStatusStrings[gpstatus]
-	} else {
-		status = "???"
-	}
-
-	// Override.
-	if gpstatus == _Gwaiting && gp.waitreason != waitReasonZero {
-		status = gp.waitreason.String()
-	}
-
+	status := gStatusString(gpstatus, gp.waitreason)
 	// approx time the G is blocked, in minutes
-	var waitfor int64
-	if (gpstatus == _Gwaiting || gpstatus == _Gsyscall) && gp.waitsince != 0 {
-		waitfor = (nanotime() - gp.waitsince) / 60e9
-	}
+	waitfor := gWaitFor(gpstatus, gp.waitsince)
+
 	print("goroutine ", gp.goid)
 	if gp.m != nil && gp.m.throwing >= throwTypeRuntime && gp == gp.m.curg || level >= 2 {
 		print(" gp=", gp)
@@ -1244,6 +1231,7 @@ func goroutineheader(gp *g) {
 			print(" m=nil")
 		}
 	}
+
 	print(" [", status)
 	if isScan {
 		print(" (scan)")
@@ -1279,6 +1267,38 @@ func printLabelMap(p unsafe.Pointer) {
 	for _, lbl := range *(*([]struct{ k, v string }))(p) {
 		print(`, "`, lbl.k, `":"`, lbl.v, `"`)
 	}
+}
+
+// gStatusString returns a string representing the status of a goroutine.
+func gStatusString(gpstatus uint32, reason waitReason) string {
+	var status string
+	if gpstatus < uint32(len(gStatusStrings)) {
+		status = gStatusStrings[gpstatus]
+	} else {
+		status = "???"
+	}
+	if gpstatus == _Gwaiting && reason != waitReasonZero {
+		status = reason.String()
+	}
+	return status
+}
+
+// gWaitFor returns the number of minutes that the goroutine has been waiting.
+func gWaitFor(gpstatus uint32, waitsince int64) int64 {
+	if (gpstatus == _Gwaiting || gpstatus == _Gsyscall) && waitsince != 0 {
+		return (nanotime() - waitsince) / 60e9
+	}
+	return 0
+}
+
+//go:linkname pprof_gWaitFor
+func pprof_gWaitFor(gpstatus uint32, waitsince int64) int64 {
+	return gWaitFor(gpstatus, waitsince)
+}
+
+//go:linkname pprof_gStatusString
+func pprof_gStatusString(gpstatus uint32, reason waitReason) string {
+	return gStatusString(gpstatus, reason)
 }
 
 func tracebackothers(me *g) {
