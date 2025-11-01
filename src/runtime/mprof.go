@@ -1345,6 +1345,13 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	systemstack(func() {
 		saveg(pc, sp, ourg, &p[0], pcbuf)
 	})
+
+	p[0].ID = ourg.goid
+	p[0].CreatorID = ourg.parentGoid
+	p[0].CreationPC = ourg.gopc
+	p[0].State = readgstatus(ourg) &^ _Gscan
+	p[0].WaitReason = uint8(ourg.waitreason)
+	p[0].WaitSince = ourg.waitsince
 	if labels != nil {
 		labels[0] = ourg.labels
 	}
@@ -1502,6 +1509,13 @@ func doRecordGoroutineProfile(gp1 *g, pcbuf []uintptr) {
 	// preventing it from being truly _Grunnable. So we'll use the system stack
 	// to avoid schedule delays.
 	systemstack(func() { saveg(^uintptr(0), ^uintptr(0), gp1, &goroutineProfile.records[offset], pcbuf) })
+
+	goroutineProfile.records[offset].ID = gp1.goid
+	goroutineProfile.records[offset].CreatorID = gp1.parentGoid
+	goroutineProfile.records[offset].CreationPC = gp1.gopc
+	goroutineProfile.records[offset].State = readgstatus(gp1) &^ _Gscan
+	goroutineProfile.records[offset].WaitReason = uint8(gp1.waitreason)
+	goroutineProfile.records[offset].WaitSince = gp1.waitsince
 
 	if goroutineProfile.labels != nil {
 		goroutineProfile.labels[offset] = gp1.labels
