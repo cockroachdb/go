@@ -993,6 +993,25 @@ func loadPackageData(ctx context.Context, path, parentPath, parentDir, parentRoo
 			}
 		}
 
+		// For FIPS snapshot packages, set up the proper install paths.
+		// When fips140.ResolveImport resolved this import, the package
+		// was loaded via ImportDir which doesn't set PkgTargetRoot/PkgObj
+		// since the source directory is not under GOROOT.
+		// We set these here so that FIPS packages can be installed like
+		// regular standard library packages when GODEBUG=installgoroot=all.
+		// Note: We don't change Root because it's used elsewhere (e.g., vendor resolution)
+		// and must point to the actual source directory's root.
+		if fips140.Snapshot() && r.dir != "" && str.HasFilePathPrefix(r.dir, fips140.Dir()) {
+			// Compute PkgTargetRoot and PkgObj for proper installation.
+			suffix := ""
+			if cfg.BuildContext.InstallSuffix != "" {
+				suffix = "_" + cfg.BuildContext.InstallSuffix
+			}
+			pkgtargetroot := "pkg/" + cfg.BuildContext.GOOS + "_" + cfg.BuildContext.GOARCH + suffix
+			data.p.PkgTargetRoot = filepath.Join(cfg.GOROOT, pkgtargetroot)
+			data.p.PkgObj = filepath.Join(cfg.GOROOT, pkgtargetroot, data.p.ImportPath+".a")
+		}
+
 		if !cfg.ModulesEnabled && data.err == nil &&
 			data.p.ImportComment != "" && data.p.ImportComment != path &&
 			!strings.Contains(path, "/vendor/") && !strings.HasPrefix(path, "vendor/") {
