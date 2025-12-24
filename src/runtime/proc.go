@@ -389,6 +389,15 @@ func Gosched() {
 	mcall(gosched_m)
 }
 
+// SetYieldPriority sets the priority used for, and only for, determining the
+// resumption order of goroutines that explicitly yielded execution by calling
+// runtime.Yield. When multiple yielding goroutines end up queued for resumption
+// the order in which they are resumed determined first by their priority, then
+// by the order in which they yielded (i.e. FIFO).
+func SetYieldPriority(priority int32)	{
+	getg().yieldPriority = priority
+}
+
 // Yield cooperatively yields if, and only if, the scheduler is "busy".
 //
 // This can be called by any work wishing to utilize strictly spare capacity
@@ -7649,15 +7658,43 @@ func (q *gQueue) popList() gList {
 }
 
 // yield_put is the gopark unlock function for Yield. It enqueues the goroutine
-// onto the global yield queue. Returning true keeps the G parked until another
-// part of the scheduler makes it runnable again. The G remains in _Gwaiting
-// after this returns. Nothing else will find/ready this G in the interim since
-// it isn't on a runq until we put it on the yieldq for findRunnable to find.
+// onto the global yield queue at the appropriate position based on its yield 
+// priority. Returning true keeps the G parked until another part of the 
+// scheduler makes it runnable again. The G remains in _Gwaiting after this 
+// returns. Nothing else will find/ready this G in the interim since it isn't on
+// a runq until we put it on the yieldq for findRunnable to find.
 //
 //go:nosplit
 func yield_put(gp *g, _ unsafe.Pointer) bool {
 	lock(&sched.lock)
-	sched.yieldq.pushBack(gp)
+
+	gp.schedlink = 0
+	if sched.yieldq.tail == 0 {
+		sched.yieldq.head.set(gp)
+		sched.yieldq.tail.set(gp)
+	} else if sched.yieldq.tail.ptr().yieldPriority >= gp.yieldPriority {
+		// If the tail has higher or equal priority, append after it.
+		sched.yieldq.tail.ptr().schedlink.set(gp)
+		sched.yieldq.tail.set(gp)
+	} else if sched.yieldq.head.ptr().yieldPriority < gp.yieldPriority {
+		// If the head has lower priority, insert before it.
+		gp.schedlink.set(sched.yieldq.head.ptr())
+		sched.yieldq.head.set(gp)
+	} else {
+		// Otherwise, find the first g with lower priority and insert before it.
+		prev := sched.yieldq.head.ptr()
+		for i := prev.schedlink.ptr(); i != nil; i = i.schedlink.ptr() {
+			if i.yieldPriority < gp.yieldPriority {
+				// Insert between prev and i.
+				gp.schedlink.set(i)
+				prev.schedlink.set(gp)
+				break
+			}
+			prev = i
+		}
+	}
+	sched.yieldq.size++
+
 	unlock(&sched.lock)
 	return true
 }
