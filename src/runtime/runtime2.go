@@ -486,6 +486,7 @@ type g struct {
 	selectDone      atomic.Uint32  // are we participating in a select and did someone win the race?
 
 	yieldchecks uint32 // a packed approx time and count of maybeYield checks; see Yield().
+	yieldPriority  int32 // priority used to *and only to* order scheduler.yieldq.
 
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile
