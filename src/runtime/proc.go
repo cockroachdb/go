@@ -391,7 +391,9 @@ func Gosched() {
 	mcall(gosched_m)
 }
 
-// Yield cooperatively yields if, and only if, the scheduler is "busy".
+// Yield cooperatively yields if, and only if, the scheduler is "busy". If it
+// yields, it returns the duration spent waiting to be rescheduled as a number
+// of nanoseconds.
 //
 // This can be called by any work wishing to utilize strictly spare capacity
 // while minimizing the degree to which it delays other work from being promptly
@@ -411,13 +413,14 @@ func Gosched() {
 // are responsible for deciding where to Yield() to avoid priority inversions.
 //
 // Yield will never park if the calling goroutine is locked to an OS thread.
-func Yield() {
+func Yield() int64 {
 	// Common/fast case: do nothing if npidle is non-zero meaning there is
 	// an idle P so no reason to yield this one. Doing only this check here keeps
 	// Yield inlineable (~70 of 80 as of writing).
 	if sched.npidle.Load() == 0 {
-		maybeYield()
+		return maybeYield()
 	}
+	return 0
 }
 
 // maybeYield is called by Yield if npidle is zero, meaning there are no idle Ps
@@ -440,12 +443,12 @@ func Yield() {
 // the check does not get optimized out of a calling loop body (hence noinline).
 //
 //go:noinline
-func maybeYield() {
+func maybeYield() int64 {
 	gp := getg()
 
 	// Don't park while locked to an OS thread.
 	if gp.lockedm != 0 {
-		return
+		return 0
 	}
 
 	// If the local P's runq ring buffer/next is non-empty, yield to waiting G.
@@ -467,13 +470,13 @@ func maybeYield() {
 		// maybe-do-expensive-checks code below which will just increment it as
 		// usual; when count=3 it will compare `prev=0` to the clock and do a check.
 		if gp.yieldchecks == 1 {
-			yieldPark()
-			return
+			return yieldPark() 
 		}
 		gp.yieldchecks = 1
+		before := nanotime()
 		// Go to the back of the local runq.
 		goyield()
-		return
+		return nanotime() - before
 	}
 
 	// If the global runq is non-empty, park in the global yieldq right away: that
@@ -482,8 +485,7 @@ func maybeYield() {
 	// remain on this P, but just parking and letting this P go to findRunnable
 	// avoids duplication of its logic and seems good enough.
 	if !sched.runq.empty() {
-		yieldPark()
-		return
+		return yieldPark()
 	}
 
 	// We didn't find anything via cheap O(1) checks of our runq or global runq
@@ -551,8 +553,7 @@ func maybeYield() {
 				// a racing steal or enqueue will get noticed when we next findRunnable
 				// or next check yield.
 				if allp[i].runqhead != allp[i].runqtail || allp[i].runnext != 0 {
-					yieldPark()
-					return
+					return yieldPark()
 				}
 			}
 
@@ -570,9 +571,11 @@ func maybeYield() {
 					}
 				})
 				if found {
+					before := nanotime()
 					// Since there were no idle Ps to get here, we can assume injectglist
 					// put runnable Gs on our local runq, to which we can just goyield.
 					goyield()
+					return nanotime() - before
 				}
 			}
 		} else if count == yieldCountMask {
@@ -580,6 +583,7 @@ func maybeYield() {
 			gp.yieldchecks = prev | (yieldCountMask / 2)
 		}
 	}
+	return 0
 }
 
 // yieldPark parks the current goroutine in a waiting state with reason yield
@@ -595,9 +599,11 @@ func maybeYield() {
 // its status -- particularly as it could end up spending significant time
 // waiting here, on the same order as other waiting states like blocking on IO
 // or locks -- better reflects the reality of its state.
-func yieldPark() {
+func yieldPark() int64 {
 	checkTimeouts()
+	before := nanotime()
 	gopark(yield_put, nil, waitReasonYield, traceBlockPreempted, 1)
+	return nanotime() - before
 }
 
 // goschedguarded yields the processor like gosched, but also checks
