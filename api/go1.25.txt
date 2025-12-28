@@ -112,3 +112,4 @@ pkg unicode, var LC *RangeTable #70780
 pkg context, func PropagateCancel(Context, func()) bool #0
 pkg runtime, func NumRunnableGoroutines() (int, int) #0
 pkg runtime, func CurrentP() int #0
+pkg runtime, func Yield() int64 #0
