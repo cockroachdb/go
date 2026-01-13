@@ -487,8 +487,14 @@ func printCountProfile(w io.Writer, debug int, name string, p countProfile) erro
 						b.pbLabelNum(tagSample_Label, "go::goroutine_created_by", int64(g.CreatorID))
 					}
 					b.pbLabel(tagSample_Label, "go::goroutine_state", pprof_gStatusString(g.State, g.WaitReason), 0)
-					if mins := pprof_gWaitFor(g.State, g.WaitSince); mins > 0 {
-						b.pbLabelNum(tagSample_Label, "go::goroutine_wait_minutes", int64(mins))
+					if nanos := pprof_gWaitFor(g.State, g.WaitSince); nanos > 0 {
+						b.pbLabelNum(tagSample_Label, "go::goroutine_wait_nanos", nanos)
+					}
+					if g.LastSched > 0 {
+						b.pbLabelNum(tagSample_Label, "go::goroutine_last_sched", pprof_elapsedNanos(g.LastSched))
+					}
+					if g.Running > 0 {
+						b.pbLabelNum(tagSample_Label, "go::goroutine_running_nanos", g.Running)
 					}
 				}
 				if lbl := p.Label(i); lbl != nil {
@@ -1042,6 +1048,9 @@ func pprof_makeProfStack() []uintptr
 
 //go:linkname pprof_gStatusString runtime.pprof_gStatusString
 func pprof_gStatusString(state uint32, reason uint8) string
+
+//go:linkname pprof_elapsedNanos runtime.pprof_elapsedNanos
+func pprof_elapsedNanos(t int64) int64
 
 //go:linkname pprof_gWaitFor runtime.pprof_gWaitFor
 func pprof_gWaitFor(gpstatus uint32, waitsince int64) int64

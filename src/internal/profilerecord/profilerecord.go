@@ -25,7 +25,8 @@ type StackRecord struct {
 	CreatorID  uint64
 	CreationPC uintptr
 	WaitSince  int64 // approx time when the g became blocked, in nanoseconds
-
+	LastSched  int64 // time of the last transition to the running state, in nanoseconds
+	Running    int64 // approx time spent in the running state, in nanoseconds
 }
 
 type MemProfileRecord struct {
