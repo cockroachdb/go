@@ -1897,7 +1897,7 @@ func postMallocgcDebug(x unsafe.Pointer, elemsize uintptr, typ *_type) {
 //
 // Caller must be preemptible.
 func deductAssistCredit(size uintptr) {
-	if debug.gcnoassist == 0 {
+	if debug.gcnoassist.Load() == 0 {
 		// Charge the current user G for this allocation.
 		assistG := getg()
 		if assistG.m.curg != nil {
