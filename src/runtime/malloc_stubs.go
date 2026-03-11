@@ -167,7 +167,7 @@ func postMallocgc(x unsafe.Pointer, typ *_type, size uintptr, elemsize uintptr) 
 //
 // Defined here so it can be inlined by mkmalloc.
 func deductAssistCredit(size uintptr) {
-	if debug.gcnoassist == 0 {
+	if debug.gcnoassist.Load() == 0 {
 		assistG := getg()
 		if assistG.m.curg != nil {
 			assistG = assistG.m.curg

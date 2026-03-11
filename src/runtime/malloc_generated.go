@@ -1806,7 +1806,7 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 
 	if gcBlackenEnabled != 0 {
 
-		if debug.gcnoassist == 0 {
+		if debug.gcnoassist.Load() == 0 {
 			assistG := getg()
 			if assistG.m.curg != nil {
 				assistG = assistG.m.curg
@@ -1949,7 +1949,7 @@ func mallocgcSmallScanSlowPath(size uintptr, typ *_type, needzero bool, spc span
 
 	if gcBlackenEnabled != 0 {
 
-		if debug.gcnoassist == 0 {
+		if debug.gcnoassist.Load() == 0 {
 			assistG := getg()
 			if assistG.m.curg != nil {
 				assistG = assistG.m.curg
@@ -2128,7 +2128,7 @@ func mallocgcSmallNoScanSlowPath(size uintptr, typ *_type, needzero bool, spc sp
 
 	if gcBlackenEnabled != 0 {
 
-		if debug.gcnoassist == 0 {
+		if debug.gcnoassist.Load() == 0 {
 			assistG := getg()
 			if assistG.m.curg != nil {
 				assistG = assistG.m.curg
