@@ -26,6 +26,8 @@ func init() {
 	register("GCZombie", GCZombie)
 	register("GCMemoryLimit", GCMemoryLimit)
 	register("GCMemoryLimitNoGCPercent", GCMemoryLimitNoGCPercent)
+	register("GCNoAssist", GCNoAssist)
+	register("GCNoAssistGODEBUG", GCNoAssistGODEBUG)
 }
 
 func GCSys() {
@@ -421,3 +423,56 @@ func gcMemoryLimit(gcPercent int) {
 const memLimitUnit = 8000
 
 var memLimitSink []*[memLimitUnit]byte
+
+func GCNoAssist() {
+	// Verify the default state.
+	if !runtime.GCAssistEnabled() {
+		fmt.Println("FAIL: GCAssistEnabled should be true by default")
+		return
+	}
+
+	// Disable and check.
+	prev := runtime.SetGCAssistEnabled(false)
+	if !prev {
+		fmt.Println("FAIL: SetGCAssistEnabled(false) should return true (previous value)")
+		return
+	}
+	if runtime.GCAssistEnabled() {
+		fmt.Println("FAIL: GCAssistEnabled should be false after disabling")
+		return
+	}
+
+	// Allocate while assist is disabled — should not crash.
+	for i := 0; i < 1000; i++ {
+		sink = make([]byte, 1024)
+	}
+	runtime.GC()
+
+	// Re-enable and check.
+	prev = runtime.SetGCAssistEnabled(true)
+	if prev {
+		fmt.Println("FAIL: SetGCAssistEnabled(true) should return false (previous value)")
+		return
+	}
+	if !runtime.GCAssistEnabled() {
+		fmt.Println("FAIL: GCAssistEnabled should be true after re-enabling")
+		return
+	}
+
+	// Allocate while assist is enabled — should not crash.
+	for i := 0; i < 1000; i++ {
+		sink = make([]byte, 1024)
+	}
+	runtime.GC()
+
+	fmt.Println("OK")
+}
+
+func GCNoAssistGODEBUG() {
+	// When GODEBUG=gcnoassist=1, GC assist should be disabled at startup.
+	if runtime.GCAssistEnabled() {
+		fmt.Println("FAIL: GCAssistEnabled should be false with GODEBUG=gcnoassist=1")
+		return
+	}
+	fmt.Println("OK")
+}
