@@ -291,3 +291,28 @@ func NumRunnableGoroutines() (numRunnable int, numProcs int) {
 	releasem(mp)
 	return numRunnable, numProcs
 }
+
+// SetGCAssistEnabled controls whether GC assist is enabled.
+// When GC assist is enabled (the default), goroutines that allocate
+// are charged for their allocations and may be required to assist the
+// garbage collector with marking work. Disabling GC assist minimizes
+// garbage collection overhead for user goroutines at the expense of
+// a higher risk of out-of-memory conditions under high allocation rates.
+//
+// The initial value is determined by the GODEBUG gcnoassist setting.
+//
+// SetGCAssistEnabled returns the previous setting.
+func SetGCAssistEnabled(enabled bool) bool {
+	var v int32
+	if !enabled {
+		v = 1
+	}
+	old := debug.gcnoassist.Swap(v)
+	return old == 0
+}
+
+// GCAssistEnabled reports whether GC assist is currently enabled.
+// See [SetGCAssistEnabled] for details.
+func GCAssistEnabled() bool {
+	return debug.gcnoassist.Load() == 0
+}

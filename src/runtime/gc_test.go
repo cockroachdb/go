@@ -215,6 +215,22 @@ func TestGcZombieReporting(t *testing.T) {
 	}
 }
 
+func TestGCNoAssist(t *testing.T) {
+	got := runTestProg(t, "testprog", "GCNoAssist")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got %q", want, got)
+	}
+}
+
+func TestGCNoAssistGODEBUG(t *testing.T) {
+	got := runTestProg(t, "testprog", "GCNoAssistGODEBUG", "GODEBUG=gcnoassist=1")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got %q", want, got)
+	}
+}
+
 func TestGCTestMoveStackOnNextCall(t *testing.T) {
 	if asan.Enabled {
 		t.Skip("extra allocations with -asan causes this to fail; see #70079")
