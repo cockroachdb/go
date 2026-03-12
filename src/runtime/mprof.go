@@ -1352,6 +1352,8 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	p[0].State = readgstatus(ourg) &^ _Gscan
 	p[0].WaitReason = uint8(ourg.waitreason)
 	p[0].WaitSince = ourg.waitsince
+	p[0].LastSched = ourg.lastsched
+	p[0].Running = ourg.runningnanos
 	if labels != nil {
 		labels[0] = ourg.labels
 	}
@@ -1516,6 +1518,8 @@ func doRecordGoroutineProfile(gp1 *g, pcbuf []uintptr) {
 	goroutineProfile.records[offset].State = readgstatus(gp1) &^ _Gscan
 	goroutineProfile.records[offset].WaitReason = uint8(gp1.waitreason)
 	goroutineProfile.records[offset].WaitSince = gp1.waitsince
+	goroutineProfile.records[offset].LastSched = gp1.lastsched
+	goroutineProfile.records[offset].Running = gp1.runningnanos
 
 	if goroutineProfile.labels != nil {
 		goroutineProfile.labels[offset] = gp1.labels

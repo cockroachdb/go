@@ -1220,7 +1220,7 @@ func goroutineheader(gp *g) {
 	// Basic string status
 	status := gStatusString(gpstatus, gp.waitreason)
 	// approx time the G is blocked, in minutes
-	waitfor := gWaitFor(gpstatus, gp.waitsince)
+	waitfor := gWaitFor(gpstatus, gp.waitsince) / 60e9
 
 	print("goroutine ", gp.goid)
 	if gp.m != nil && gp.m.throwing >= throwTypeRuntime && gp == gp.m.curg || level >= 2 {
@@ -1283,10 +1283,10 @@ func gStatusString(gpstatus uint32, reason waitReason) string {
 	return status
 }
 
-// gWaitFor returns the number of minutes that the goroutine has been waiting.
+// gWaitFor returns the number of nanoseconds that the goroutine has been waiting.
 func gWaitFor(gpstatus uint32, waitsince int64) int64 {
 	if (gpstatus == _Gwaiting || gpstatus == _Gsyscall) && waitsince != 0 {
-		return (nanotime() - waitsince) / 60e9
+		return pprof_elapsedNanos(waitsince)
 	}
 	return 0
 }
@@ -1299,6 +1299,11 @@ func pprof_gWaitFor(gpstatus uint32, waitsince int64) int64 {
 //go:linkname pprof_gStatusString
 func pprof_gStatusString(gpstatus uint32, reason waitReason) string {
 	return gStatusString(gpstatus, reason)
+}
+
+//go:linkname pprof_elapsedNanos
+func pprof_elapsedNanos(t int64) int64 {
+	return nanotime() - t
 }
 
 func tracebackothers(me *g) {
