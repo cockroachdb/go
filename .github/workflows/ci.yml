@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - 'cockroach-*'
+  pull_request:
+    branches:
+      - master
+      - 'cockroach-*'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up bootstrap Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Save GOROOT_BOOTSTRAP
+        run: echo "GOROOT_BOOTSTRAP=$(go env GOROOT)" >> "$GITHUB_ENV"
+
+      - name: Build toolchain
+        run: cd src && ./make.bash
+
+      # Run the dist test suite, skipping:
+      #   :race / :race-external — need race detector build (dist test -race)
+      #   testfortran            — needs gfortran
+      #   relnote:check          — needs doc/next/ fragments (not on release branches)
+      - name: Run tests
+        run: |
+          bin/go tool dist test -k \
+            -run '!:(race|race-external)$|testfortran|relnote:check'
+        env:
+          GOROOT: ${{ github.workspace }}

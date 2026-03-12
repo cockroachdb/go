@@ -404,7 +404,9 @@ func recursionChainBottom(x int, pcs []uintptr) {
 	recursionChainTop(x-1, pcs)
 }
 
-func parseProfile(t *testing.T, valBytes []byte, f func(uintptr, []*profile.Location, map[string][]string)) *profile.Profile {
+func parseProfile(
+	t *testing.T, valBytes []byte, f func(uintptr, []*profile.Location, map[string][]string),
+) *profile.Profile {
 	p, err := profile.Parse(bytes.NewReader(valBytes))
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +420,9 @@ func parseProfile(t *testing.T, valBytes []byte, f func(uintptr, []*profile.Loca
 
 // testCPUProfile runs f under the CPU profiler, checking for some conditions specified by need,
 // as interpreted by matches, and returns the parsed profile.
-func testCPUProfile(t *testing.T, matches profileMatchFunc, f func(dur time.Duration)) *profile.Profile {
+func testCPUProfile(
+	t *testing.T, matches profileMatchFunc, f func(dur time.Duration),
+) *profile.Profile {
 	switch runtime.GOOS {
 	case "darwin":
 		out, err := testenv.Command(t, "uname", "-a").CombinedOutput()
@@ -502,7 +506,9 @@ func diffCPUTime(t *testing.T, f func()) (user, system time.Duration) {
 }
 
 // stackContains matches if a function named spec appears anywhere in the stack trace.
-func stackContains(spec string, count uintptr, stk []*profile.Location, labels map[string][]string) bool {
+func stackContains(
+	spec string, count uintptr, stk []*profile.Location, labels map[string][]string,
+) bool {
 	for _, loc := range stk {
 		for _, line := range loc.Line {
 			if strings.Contains(line.Function.Name, spec) {
@@ -515,7 +521,9 @@ func stackContains(spec string, count uintptr, stk []*profile.Location, labels m
 
 type sampleMatchFunc func(spec string, count uintptr, stk []*profile.Location, labels map[string][]string) bool
 
-func profileOk(t *testing.T, matches profileMatchFunc, prof *bytes.Buffer, duration time.Duration) (_ *profile.Profile, ok bool) {
+func profileOk(
+	t *testing.T, matches profileMatchFunc, prof *bytes.Buffer, duration time.Duration,
+) (_ *profile.Profile, ok bool) {
 	ok = true
 
 	var samples uintptr
@@ -760,7 +768,9 @@ func TestMathBigDivide(t *testing.T) {
 }
 
 // stackContainsAll matches if all functions in spec (comma-separated) appear somewhere in the stack trace.
-func stackContainsAll(spec string, count uintptr, stk []*profile.Location, labels map[string][]string) bool {
+func stackContainsAll(
+	spec string, count uintptr, stk []*profile.Location, labels map[string][]string,
+) bool {
 	for _, f := range strings.Split(spec, ",") {
 		if !stackContains(f, count, stk, labels) {
 			return false
@@ -1935,6 +1945,7 @@ func BenchmarkGoroutine(b *testing.B) {
 }
 
 func TestGoroutineProfileDebug3Creators(t *testing.T) {
+	t.Skip("cockroach: known flaky on linux/amd64, see https://github.com/cockroachdb/cockroach/issues/165528")
 	// Create synthetic goroutines using the helper
 	cleanup := createSyntheticGoroutines(10, 2)
 	defer cleanup()
@@ -2150,7 +2161,9 @@ func TestEmptyCallStack(t *testing.T) {
 
 // stackContainsLabeled takes a spec like funcname;key=value and matches if the stack has that key
 // and value and has funcname somewhere in the stack.
-func stackContainsLabeled(spec string, count uintptr, stk []*profile.Location, labels map[string][]string) bool {
+func stackContainsLabeled(
+	spec string, count uintptr, stk []*profile.Location, labels map[string][]string,
+) bool {
 	base, kv, ok := strings.Cut(spec, ";")
 	if !ok {
 		panic("no semicolon in key/value spec")
@@ -2860,7 +2873,9 @@ func produceProfileEvents(t *testing.T, depth int) {
 	goroutineDeep(t, depth-4) // -4 for produceProfileEvents, **, chanrecv1, chanrev, gopark
 }
 
-func getProfileStacks(collect func([]runtime.BlockProfileRecord) (int, bool), fileLine bool, pcs bool) []string {
+func getProfileStacks(
+	collect func([]runtime.BlockProfileRecord) (int, bool), fileLine bool, pcs bool,
+) []string {
 	var n int
 	var ok bool
 	var p []runtime.BlockProfileRecord
@@ -3047,7 +3062,9 @@ func TestProfileRecordNullPadding(t *testing.T) {
 	// Not testing ThreadCreateProfile because it is broken, see issue 6104.
 }
 
-func testProfileRecordNullPadding[T runtime.StackRecord | runtime.MemProfileRecord | runtime.BlockProfileRecord](t *testing.T, name string, fn func([]T) (int, bool)) {
+func testProfileRecordNullPadding[T runtime.StackRecord | runtime.MemProfileRecord | runtime.BlockProfileRecord](
+	t *testing.T, name string, fn func([]T) (int, bool),
+) {
 	stack0 := func(sr *T) *[32]uintptr {
 		switch t := any(sr).(type) {
 		case *runtime.StackRecord:
