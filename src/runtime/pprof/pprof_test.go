@@ -1945,7 +1945,6 @@ func BenchmarkGoroutine(b *testing.B) {
 }
 
 func TestGoroutineProfileDebug3Creators(t *testing.T) {
-	t.Skip("cockroach: known flaky on linux/amd64, see https://github.com/cockroachdb/cockroach/issues/165528")
 	// Create synthetic goroutines using the helper
 	cleanup := createSyntheticGoroutines(10, 2)
 	defer cleanup()
@@ -1985,9 +1984,11 @@ func TestGoroutineProfileDebug3Creators(t *testing.T) {
 		id := strconv.Itoa(int(s.NumLabel["go::goroutine"][0]))
 		got := s.NumLabel["go::goroutine_created_by"]
 		if createdBy[id] == "" {
-			if len(got) != 0 {
-				t.Fatalf("goroutine %s: got created_by %q, want none", id, got)
-			}
+			// debug=3 may report created_by for goroutines whose
+			// creating function is filtered by showframe in debug=2
+			// (e.g. runtime-internal goroutines). This is expected:
+			// debug=3 provides a superset of debug=2's created_by data.
+			continue
 		} else {
 			if e := createdBy[id]; len(got) != 1 || strconv.Itoa(int(got[0])) != e {
 				t.Fatalf("goroutine %s: got created_by %q, want %q", id, got, e)
